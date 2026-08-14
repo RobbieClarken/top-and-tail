@@ -38,22 +38,27 @@ def find_bounds(samples, *, sample_rate, threshold_db, min_silence, padding):
     total = len(samples)
     limit = _quiet_limit(threshold_db)
 
-    lead = 0
-    while lead < total and abs(samples[lead]) <= limit:
-        lead += 1
+    # Sample indices bounding the audible content: the first audible sample,
+    # and the one just past the last.
+    utterance_start = 0
+    while utterance_start < total and abs(samples[utterance_start]) < limit:
+        utterance_start += 1
 
-    if lead == total:
+    if utterance_start == total:
         return None
 
-    trail = total
-    while trail > lead and abs(samples[trail - 1]) <= limit:
-        trail -= 1
+    utterance_end = total
+    while abs(samples[utterance_end - 1]) < limit:
+        utterance_end -= 1
 
     min_samples = round(min_silence * sample_rate)
     pad_samples = round(padding * sample_rate)
 
-    start = lead - pad_samples if lead >= min_samples else 0
-    end = trail + pad_samples if total - trail >= min_samples else total
+    leading_quiet = utterance_start
+    trailing_quiet = total - utterance_end
+
+    start = utterance_start - pad_samples if leading_quiet >= min_samples else 0
+    end = utterance_end + pad_samples if trailing_quiet >= min_samples else total
 
     return max(start, 0) / sample_rate, min(end, total) / sample_rate
 
@@ -74,11 +79,15 @@ def decode(source):
     return samples
 
 
-def cut(source, destination, start, end):
+def copy_frames(source, destination, start, end):
     """Copy the frames between start and end into the destination.
 
     Frames are copied, never re-encoded, so the retained audio is
     bit-identical to the source. Cut points quantise to the frame size.
+
+    ID3 tags are carried across, with one unavoidable exception: the mp3
+    muxer always stamps its own `encoder` tag, and neither -bitexact (which
+    drops every tag) nor an explicit -metadata override prevents it.
     """
     subprocess.run(
         [
@@ -105,7 +114,7 @@ def strip(source, destination, *, threshold_db, min_silence, padding):
     # A source with no utterance is kept whole rather than truncated to
     # nothing. Reporting it as unchanged belongs to a later ticket.
     start, end = found if found else (0.0, len(samples) / ANALYSIS_RATE)
-    cut(source, destination, start, end)
+    copy_frames(source, destination, start, end)
 
 
 def default_destination(source):

@@ -5,7 +5,7 @@ from array import array
 
 import pytest
 
-from conftest import FIXTURES, TOOL
+from conftest import TOOL, copy_fixture
 
 RATE = 44100
 PADDING = 0.050
@@ -81,8 +81,7 @@ def test_strips_trailing_silence_to_a_stripped_sibling(hablar):
 
 @pytest.mark.parametrize("name", sorted(UTTERANCE_ENDS))
 def test_every_fixture_is_stripped_to_the_expected_duration(name, tmp_path):
-    source = tmp_path / name
-    source.write_bytes((FIXTURES / name).read_bytes())
+    source = copy_fixture(name, tmp_path)
 
     assert run(source).returncode == 0
 
@@ -141,6 +140,30 @@ def test_a_non_ascii_source_name_is_handled(preterito):
     assert "pretérito" in stripped.name
 
 
+def test_leading_silence_is_stripped(hablar, tmp_path):
+    # No fixture has strippable leading silence — the most any of them opens
+    # with is hablar's 47ms, under the 0.1s minimum run. So build a source that
+    # does, by prepending a second of silence.
+    padded = tmp_path / "padded.mp3"
+    subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-y", "-i", str(hablar),
+            "-af", "adelay=1000", "-c:a", "libmp3lame", "-b:a", "128k",
+            str(padded),
+        ],
+        check=True,
+    )
+    assert audio_length(padded) > 2.8
+
+    assert run(padded).returncode == 0
+
+    samples = array("h", pcm(padded.with_suffix(".stripped.mp3")))
+    first_audible = next(i for i, s in enumerate(samples) if abs(s) > 104)
+    # The prepended second is gone, back to the padding and the frame the cut
+    # rounds to.
+    assert first_audible / RATE <= PADDING + FRAME
+
+
 def test_id3_tags_survive_stripping(hablar):
     from mutagen.id3 import TIT2, TPE1
     from mutagen.mp3 import MP3
@@ -155,3 +178,21 @@ def test_id3_tags_survive_stripping(hablar):
     stripped = MP3(hablar.with_suffix(".stripped.mp3"))
     assert stripped.tags["TIT2"].text == ["hablar"]
     assert stripped.tags["TPE1"].text == ["Vocabulary Deck"]
+
+
+def test_the_muxer_rewrites_the_encoder_tag(hablar):
+    """The one tag that does not survive, pinned so the loss stays visible.
+
+    ffmpeg's mp3 muxer always stamps its own `encoder`. Neither -bitexact
+    (which drops every tag) nor an explicit -metadata override prevents it, so
+    the sources' only shipped tag is replaced rather than carried.
+    """
+    from mutagen.mp3 import MP3
+
+    before = MP3(hablar).tags["TSSE"].text
+    assert before == ["Lavf60.16.101"]
+
+    run(hablar)
+
+    after = MP3(hablar.with_suffix(".stripped.mp3")).tags["TSSE"].text
+    assert after != before

@@ -44,20 +44,15 @@ def samples(*runs):
 
 @pytest.fixture
 def hablar(tmp_path):
-    return _copy_fixture("hablar-oWSxI36XAKnfMWmzmQok-eleven_v3.mp3", tmp_path)
+    return copy_fixture("hablar-oWSxI36XAKnfMWmzmQok-eleven_v3.mp3", tmp_path)
 
 
 @pytest.fixture
 def preterito(tmp_path):
-    return _copy_fixture("pretérito-oWSxI36XAKnfMWmzmQok-eleven_v3.mp3", tmp_path)
+    return copy_fixture("pretérito-oWSxI36XAKnfMWmzmQok-eleven_v3.mp3", tmp_path)
 
 
-@pytest.fixture
-def yo(tmp_path):
-    return _copy_fixture("yo-oWSxI36XAKnfMWmzmQok-eleven_v3.mp3", tmp_path)
-
-
-def _copy_fixture(name, tmp_path):
+def copy_fixture(name, tmp_path):
     destination = tmp_path / name
     shutil.copy(FIXTURES / name, destination)
     return destination

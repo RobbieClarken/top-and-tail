@@ -35,9 +35,10 @@ REQUIRED_TOOLS = ("ffmpeg", "ffprobe")
 def _as_argument(path: Path) -> str:
     """Render a path for a command line, always absolute.
 
-    ffprobe takes its input as a positional argument, so a relative name
-    beginning with a dash would be parsed as an option — `-dash.mp3` fails with
-    "Missing argument for option". An absolute path can never start with one.
+    Applied to every path handed to ffmpeg or ffprobe. ffprobe takes its input
+    as a positional argument, so a relative name beginning with a dash is
+    parsed as an option — `-dash.mp3` fails with "Missing argument for option".
+    An absolute path can never start with one.
     """
     return str(path.absolute())
 
@@ -207,7 +208,7 @@ def is_same_file(source: Path, destination: Path) -> bool:
 
 
 def _unwritable(destination: Path, error: OSError) -> Failure:
-    return Failure(f"cannot write {destination}: {error.strerror}")
+    return Failure(f"cannot write {destination}: {error.strerror or error}")
 
 
 def place(
@@ -224,25 +225,27 @@ def place(
     # mkstemp creates at 0600, and the rename would carry that onto the
     # destination — silently making a 0644 file owner-only. Keep whatever mode
     # the destination already had, or failing that the source's.
-    existing = destination if destination.exists() else source
-    mode = stat.S_IMODE(existing.stat().st_mode)
-
     try:
+        existing = destination if destination.exists() else source
+        mode = stat.S_IMODE(existing.stat().st_mode)
         handle, path = tempfile.mkstemp(dir=destination.parent, suffix=".mp3")
     except OSError as error:
         raise _unwritable(destination, error) from error
+
     os.close(handle)
     scratch = Path(path)
     try:
-        produce(scratch)
-        scratch.chmod(mode)
-        os.replace(scratch, destination)
-    except BaseException as error:
-        # Only on the failure path: after a successful rename the name is gone,
-        # and unlinking it could remove a file another run has just created.
-        scratch.unlink(missing_ok=True)
-        if isinstance(error, OSError):
+        try:
+            produce(scratch)
+            scratch.chmod(mode)
+            os.replace(scratch, destination)
+        except OSError as error:
             raise _unwritable(destination, error) from error
+    except BaseException:
+        # The outer net is deliberately broad: the temporary must not survive a
+        # KeyboardInterrupt either. Only on the failure path, since after a
+        # successful rename the name is gone and could have been reused.
+        scratch.unlink(missing_ok=True)
         raise
 
 
@@ -344,6 +347,16 @@ def strip(
     return Outcome.for_source(source, before, probe_duration(destination))
 
 
+def check_source(source: Path) -> None:
+    """Reject an unusable source by naming what is actually wrong with it."""
+    if not source.exists():
+        raise Failure("broken symlink" if source.is_symlink() else "no such file")
+    if not source.is_file():
+        raise Failure("not a regular file")
+    if not os.access(source, os.R_OK):
+        raise Failure("not readable")
+
+
 def destination_for(
     source: Path, *, inplace: bool, named: Path | None
 ) -> Path:
@@ -358,6 +371,35 @@ def destination_for(
     if named is not None:
         return named.resolve()
     return source.with_suffix(".stripped.mp3").resolve()
+
+
+def strip_all(
+    sources: Sequence[Path], *, inplace: bool, named: Path | None
+) -> tuple[list[Outcome], int]:
+    """Strip every source, reporting as it goes. Returns outcomes and failures.
+
+    One bad source must not stop the rest of the batch: a single failed
+    download should not block everything generated alongside it.
+    """
+    outcomes = []
+    failures = 0
+    for source in sources:
+        try:
+            check_source(source)
+            outcome = strip(
+                source,
+                destination_for(source, inplace=inplace, named=named),
+                threshold_db=DEFAULT_THRESHOLD_DB,
+                min_silence=DEFAULT_MIN_SILENCE,
+                padding=DEFAULT_PADDING,
+            )
+        except Failure as failure:
+            print(f"{source}: {failure}", file=sys.stderr)
+            failures += 1
+            continue
+        print(outcome)
+        outcomes.append(outcome)
+    return outcomes, failures
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -413,41 +455,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
 
-    outcomes = []
-    failures = 0
-    for source in args.sources:
-        # One bad source must not stop the rest of the batch: a single failed
-        # download should not block everything generated alongside it.
-        try:
-            if not source.is_file():
-                raise Failure("no such file")
-            destination = destination_for(
-                source, inplace=args.inplace, named=args.output
-            )
-            outcome = strip(
-                source,
-                destination,
-                threshold_db=DEFAULT_THRESHOLD_DB,
-                min_silence=DEFAULT_MIN_SILENCE,
-                padding=DEFAULT_PADDING,
-            )
-        except Failure as failure:
-            print(f"{source}: {failure}", file=sys.stderr)
-            failures += 1
-            continue
-        print(outcome)
-        outcomes.append(outcome)
+    outcomes, failures = strip_all(
+        args.sources, inplace=args.inplace, named=args.output
+    )
 
-    # A summary that merely restates the single line above it is noise.
+    # A summary that merely restates the single line above it is noise — which
+    # applies to the failure count just as much as to the totals.
     if len(outcomes) > 1:
         print(Outcome.total(outcomes))
+    if failures and len(args.sources) > 1:
+        print(f"{failures} of {len(args.sources)} sources failed", file=sys.stderr)
 
-    if failures:
-        print(
-            f"{failures} of {len(args.sources)} sources failed", file=sys.stderr
-        )
-        return 1
-    return 0
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

@@ -645,6 +645,7 @@ def test_a_corrupt_source_is_reported(tmp_path):
 def test_an_unwritable_destination_is_reported(hablar, tmp_path):
     locked = tmp_path / "locked"
     locked.mkdir()
+    before = hablar.read_bytes()
     locked.chmod(0o555)
     try:
         result = run("-o", locked / "out.mp3", hablar)
@@ -653,7 +654,8 @@ def test_an_unwritable_destination_is_reported(hablar, tmp_path):
 
     assert result.returncode != 0
     assert "Traceback" not in result.stderr
-    assert duration(hablar) > 1.9
+    assert str(locked / "out.mp3") in result.stderr
+    assert hablar.read_bytes() == before
     assert list(locked.iterdir()) == []
 
 
@@ -670,24 +672,39 @@ def test_one_bad_source_does_not_stop_the_others(hablar, tmp_path):
     assert_stripped(hablar.with_suffix(".stripped.mp3"))
 
 
-def test_a_failed_inplace_run_leaves_no_temporary_behind(hablar, tmp_path):
-    broken = tmp_path / "broken.mp3"
-    broken.write_bytes(b"not an mp3" * 64)
+def test_a_failure_after_the_temporary_exists_cleans_it_up(hablar, tmp_path):
+    """Reach the cleanup path, which needs a failure after mkstemp.
 
-    assert run("--inplace", broken).returncode != 0
+    A corrupt source fails in probe_duration, long before any temporary is
+    created, so it cannot exercise this. Writing to an existing directory gets
+    all the way to the rename before failing.
+    """
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    before = hablar.read_bytes()
 
-    assert sorted(p.name for p in tmp_path.iterdir()) == [
-        "broken.mp3",
-        hablar.name,
-    ]
+    result = run("-o", blocked, hablar)
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert str(blocked) in result.stderr
+    assert hablar.read_bytes() == before
+    # The temporary lived in the destination's parent, which is tmp_path.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["blocked", hablar.name]
 
 
-@pytest.mark.parametrize("present", [(), ("ffmpeg",)])
-def test_missing_dependencies_are_reported_by_name(present, hablar, tmp_path):
+@pytest.mark.parametrize(
+    ("present", "expected"),
+    [((), "ffmpeg and ffprobe not found"), (("ffmpeg",), "ffprobe not found")],
+)
+def test_missing_dependencies_are_reported_by_name(
+    present, expected, hablar, tmp_path
+):
     """Each required binary is named when absent, including ffprobe alone.
 
-    The PATH holds only uv plus whatever `present` allows, so the shebang still
-    resolves while the tools under test do not.
+    Asserted on the leading clause, not merely on the name appearing somewhere:
+    the message ends with "needs ffmpeg and ffprobe, which ship together", so a
+    substring check passes even when the wrong tool is reported missing.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -705,8 +722,7 @@ def test_missing_dependencies_are_reported_by_name(present, hablar, tmp_path):
 
     assert result.returncode != 0
     assert "Traceback" not in result.stderr
-    expected = "ffprobe" if present else "ffmpeg"
-    assert expected in result.stderr
+    assert result.stderr.startswith(expected), result.stderr
     assert not hablar.with_suffix(".stripped.mp3").exists()
 
 
@@ -725,3 +741,45 @@ def test_a_relative_source_name_starting_with_a_dash_is_handled(hablar):
 
     assert result.returncode == 0, result.stderr
     assert_stripped(dashed.with_suffix(".stripped.mp3"))
+
+
+def test_a_broken_symlink_source_says_so(tmp_path):
+    dangling = tmp_path / "dangling.mp3"
+    dangling.symlink_to(tmp_path / "gone.mp3")
+
+    result = run(dangling)
+
+    assert result.returncode != 0
+    assert "broken symlink" in result.stderr
+
+
+def test_a_source_that_is_not_a_regular_file_says_so(tmp_path):
+    pipe = tmp_path / "pipe.mp3"
+    os.mkfifo(pipe)
+
+    result = run(pipe)
+
+    assert result.returncode != 0
+    assert "not a regular file" in result.stderr
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file permissions")
+def test_an_unreadable_source_says_so(hablar):
+    hablar.chmod(0o000)
+    try:
+        result = run(hablar)
+    finally:
+        hablar.chmod(0o644)
+
+    assert result.returncode != 0
+    assert "not readable" in result.stderr
+
+
+def test_a_single_failing_source_gets_no_failure_summary(tmp_path):
+    broken = tmp_path / "broken.mp3"
+    broken.write_bytes(b"not an mp3" * 64)
+
+    result = run(broken)
+
+    assert result.returncode == 1
+    assert "sources failed" not in result.stderr

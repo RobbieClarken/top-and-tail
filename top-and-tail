@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 from array import array
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -139,15 +139,26 @@ def copy_frames(
     )
 
 
-def write_atomically(
-    source: Path, destination: Path, start: float, end: float
-) -> None:
-    """Write the stripped result through a temporary file, then rename.
+def copy_bytes(source: Path, destination: Path) -> None:
+    """Copy a source verbatim, for when there is nothing to strip."""
+    shutil.copyfile(source, destination)
 
-    The temporary lives in the destination's own directory so the rename stays
-    on one filesystem and is therefore atomic. An interrupted run leaves the
-    destination as it was rather than truncated, which is what makes it safe
-    for a destination to be its own source.
+
+def is_same_file(source: Path, destination: Path) -> bool:
+    """Whether both names refer to one file — identity, symlink or hard link."""
+    return destination.exists() and destination.samefile(source)
+
+
+def place(
+    source: Path, destination: Path, produce: Callable[[Path], None]
+) -> None:
+    """Build the destination's contents via a temporary file, then rename.
+
+    Every write goes through here — stripped results and exact copies alike —
+    so both obey one set of rules. The temporary lives in the destination's own
+    directory, so the rename stays on one filesystem and is therefore atomic.
+    An interrupted run leaves the destination as it was rather than truncated,
+    which is what makes it safe for a destination to be its own source.
     """
     # mkstemp creates at 0600, and the rename would carry that onto the
     # destination — silently making a 0644 file owner-only. Keep whatever mode
@@ -159,7 +170,7 @@ def write_atomically(
     os.close(handle)
     scratch = Path(path)
     try:
-        copy_frames(source, scratch, start, end)
+        produce(scratch)
         scratch.chmod(mode)
         os.replace(scratch, destination)
     except BaseException:
@@ -220,12 +231,13 @@ def keep_unchanged(source: Path, destination: Path) -> None:
     """Leave an unstrippable source alone, but still produce the destination.
 
     Writing the destination keeps a batch's output set complete regardless of
-    which sources needed work. The exception is an in-place strip, where the
-    destination is the source: rewriting it with identical bytes would bump
-    the mtime and wake every file watcher for no reason.
+    which sources needed work. The exception is when the destination already
+    is the source: rewriting it with identical bytes would bump the mtime and
+    wake every file watcher for no reason.
     """
-    if destination != source.resolve():
-        shutil.copy2(source, destination)
+    if is_same_file(source, destination):
+        return
+    place(source, destination, lambda scratch: copy_bytes(source, scratch))
 
 
 def strip(
@@ -255,7 +267,11 @@ def strip(
         return Outcome.for_source(source, before, before, unchanged=True)
 
     start, end = found
-    write_atomically(source, destination, start, end)
+    place(
+        source,
+        destination,
+        lambda scratch: copy_frames(source, scratch, start, end),
+    )
 
     # Measured from the written file rather than from the bounds we asked for,
     # so the report states what is actually on disk after frame rounding.

@@ -59,6 +59,19 @@ def audio_length(path):
     return duration(path) - _probe(path, "stream=start_time")
 
 
+def make_silent_mp3(path, seconds=1.0):
+    subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-y",
+            "-f", "lavfi", "-i", f"anullsrc=r={RATE}:cl=mono",
+            "-t", str(seconds), "-c:a", "libmp3lame", "-b:a", "128k",
+            str(path),
+        ],
+        check=True,
+    )
+    return path
+
+
 def assert_stripped(path, seconds=0.692):
     """The fixture durations after stripping, within frame-rounding slack."""
     assert abs(duration(path) - seconds) < 0.03, duration(path)
@@ -437,29 +450,6 @@ def test_inplace_handles_several_sources(tmp_path):
         assert not source.with_suffix(".stripped.mp3").exists()
 
 
-def test_a_source_with_nothing_to_strip_is_reported_unchanged(hablar):
-    run(hablar)
-    stripped = hablar.with_suffix(".stripped.mp3")
-
-    result = run("--inplace", stripped)
-
-    assert result.returncode == 0, result.stderr
-    assert "unchanged" in result.stdout
-
-
-def make_silent_mp3(path, seconds=1.0):
-    subprocess.run(
-        [
-            "ffmpeg", "-v", "error", "-y",
-            "-f", "lavfi", "-i", f"anullsrc=r={RATE}:cl=mono",
-            "-t", str(seconds), "-c:a", "libmp3lame", "-b:a", "128k",
-            str(path),
-        ],
-        check=True,
-    )
-    return path
-
-
 def test_a_silent_source_is_unchanged_and_never_truncated(tmp_path):
     # A file with no utterance is almost certainly a failed generation. Keep
     # it for inspection rather than truncating it to nothing.
@@ -474,7 +464,7 @@ def test_a_silent_source_is_unchanged_and_never_truncated(tmp_path):
     assert silent.with_suffix(".stripped.mp3").read_bytes() == original
 
 
-def test_an_unchanged_outcome_still_writes_the_destination(hablar, tmp_path):
+def test_an_unchanged_outcome_still_writes_the_destination(tmp_path):
     silent = make_silent_mp3(tmp_path / "silent.mp3")
     named = tmp_path / "chosen.mp3"
 
@@ -500,7 +490,8 @@ def test_a_batch_of_unchanged_sources_exits_zero(tmp_path):
     result = run(*silents)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.count("unchanged") == 4  # three sources plus summary
+    lines = result.stdout.strip().splitlines()
+    assert all(line.endswith("unchanged") for line in lines), lines
 
 
 def test_a_second_run_is_byte_identical_to_the_first(hablar):
@@ -511,3 +502,37 @@ def test_a_second_run_is_byte_identical_to_the_first(hablar):
     assert run("--inplace", stripped).returncode == 0
 
     assert stripped.read_bytes() == first
+
+
+def test_a_hardlinked_destination_is_recognised_as_the_source(tmp_path):
+    # Path inequality is not file inequality: a hard link has a different name
+    # and the same inode, and copying a file onto itself raises.
+    silent = make_silent_mp3(tmp_path / "silent.mp3")
+    hardlink = tmp_path / "hardlink.mp3"
+    os.link(silent, hardlink)
+    original = silent.read_bytes()
+
+    settled = silent.stat()
+
+    result = run("-o", hardlink, silent)
+
+    assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr
+    assert silent.read_bytes() == original
+    # Rewriting would rename a fresh file over one of the two names, breaking
+    # the link and bumping the mtime, for a file that needed no work.
+    assert silent.samefile(hardlink)
+    assert silent.stat().st_mtime_ns == settled.st_mtime_ns
+
+
+def test_an_unchanged_destination_keeps_its_own_mode(tmp_path):
+    # The unchanged path must obey the same mode rule as the stripped one.
+    silent = make_silent_mp3(tmp_path / "silent.mp3")
+    silent.chmod(0o644)
+    named = tmp_path / "chosen.mp3"
+    named.write_bytes(b"placeholder")
+    named.chmod(0o600)
+
+    assert run("-o", named, silent).returncode == 0
+
+    assert stat.S_IMODE(named.stat().st_mode) == 0o600

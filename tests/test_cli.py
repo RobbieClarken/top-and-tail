@@ -169,15 +169,17 @@ def test_id3_tags_survive_stripping(hablar):
     from mutagen.mp3 import MP3
 
     tagged = MP3(hablar)
+    assert tagged.tags is not None
     tagged.tags.add(TIT2(encoding=3, text="hablar"))
     tagged.tags.add(TPE1(encoding=3, text="Vocabulary Deck"))
     tagged.save()
 
     run(hablar)
 
-    stripped = MP3(hablar.with_suffix(".stripped.mp3"))
-    assert stripped.tags["TIT2"].text == ["hablar"]
-    assert stripped.tags["TPE1"].text == ["Vocabulary Deck"]
+    stripped = MP3(hablar.with_suffix(".stripped.mp3")).tags
+    assert stripped is not None
+    assert stripped["TIT2"].text == ["hablar"]
+    assert stripped["TPE1"].text == ["Vocabulary Deck"]
 
 
 def test_the_muxer_rewrites_the_encoder_tag(hablar):
@@ -189,10 +191,13 @@ def test_the_muxer_rewrites_the_encoder_tag(hablar):
     """
     from mutagen.mp3 import MP3
 
-    before = MP3(hablar).tags["TSSE"].text
+    source_tags = MP3(hablar).tags
+    assert source_tags is not None
+    before = source_tags["TSSE"].text
     assert before == ["Lavf60.16.101"]
 
     run(hablar)
 
-    after = MP3(hablar.with_suffix(".stripped.mp3")).tags["TSSE"].text
-    assert after != before
+    stripped_tags = MP3(hablar.with_suffix(".stripped.mp3")).tags
+    assert stripped_tags is not None
+    assert stripped_tags["TSSE"].text != before

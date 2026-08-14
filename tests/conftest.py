@@ -19,6 +19,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 def _load_tool():
     loader = importlib.machinery.SourceFileLoader("top_and_tail", str(TOOL))
     spec = importlib.util.spec_from_loader(loader.name, loader)
+    assert spec is not None, f"could not load the tool from {TOOL}"
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module

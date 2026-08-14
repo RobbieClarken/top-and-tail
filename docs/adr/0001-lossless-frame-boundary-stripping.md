@@ -14,4 +14,6 @@ Cut points quantise to the MP3 frame size of roughly 26 ms, and ffmpeg rounds to
 
 **Hand-rolling the frame parsing and Xing rewrite** in Python, using ffmpeg only to decode PCM for analysis. Rejected once `-c copy` was measured to be bit-exact and to fix the Xing header itself. `mutagen` is the library to reach for if that ever disappoints.
 
+Letting ffmpeg write the output does cost one thing: its mp3 muxer always stamps its own `encoder` tag, so that frame is replaced rather than carried. `-bitexact` drops every tag instead, and an explicit `-metadata encoder=` override is ignored; both were tested. Preserving it would mean assembling the output ourselves — writing the source's ID3 block in front of a tag-free stream — which is the hand-rolling this decision exists to avoid. Other frames, including title and artist, survive untouched.
+
 **pydub**, which ships `strip_silence()` and `detect_leading_silence()`. Rejected twice over: it re-encodes on export, defeating the whole decision, and version 0.25.1 (last released 2021) does not import on Python 3.13 at all, since it depends on the `audioop` module removed by PEP 594.

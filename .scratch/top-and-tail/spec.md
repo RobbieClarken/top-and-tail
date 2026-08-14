@@ -94,7 +94,7 @@ The user points it at one or more source files. By default each result is writte
 
 - Frames are copied, never re-encoded, using ffmpeg's stream copy. Measured to leave the retained region bit-identical and to rewrite the Xing/Info header's frame count correctly, so no header repair is required.
 - Cut points therefore quantise to the MP3 frame size of roughly 26 ms, rounding toward keeping audio.
-- ID3 tags are carried from source to destination via ffmpeg's metadata mapping.
+- ID3 tags are carried from source to destination via ffmpeg's metadata mapping. User-set frames such as title and artist survive intact. The `encoder` frame does not: the mp3 muxer overwrites it with ffmpeg's own version string, and neither `-bitexact` (which drops every tag) nor an explicit `-metadata encoder=` override prevents it. Both were tested.
 
 ### Destinations and outcomes
 
@@ -162,7 +162,7 @@ The three examples are committed to the repository as fixtures. They total rough
 - Removing or shortening internal silence, and any other alteration of the utterance.
 - Re-encoding, bitrate changes, resampling, channel changes, loudness normalisation, fades, and every other audio effect.
 - Directory arguments and recursive traversal. Explicit file paths only.
-- Editing ID3 tags. They are carried across unmodified; nothing is added, removed or rewritten.
+- Editing ID3 tags. They are carried across as they stand; the tool adds, removes and rewrites nothing itself. The one exception is outside the tool's control: ffmpeg's mp3 muxer always stamps its own `encoder` tag, so that single frame is replaced rather than carried. Preserving it would mean writing the source's ID3 block ourselves, which is also out of scope.
 - Parallel processing across files. The batches are small and the files are short.
 - A configuration file. The three settings are flags with defaults.
 - Packaging, publishing, and any distribution mechanism beyond symlinking the single file onto `PATH`.

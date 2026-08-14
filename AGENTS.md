@@ -1,5 +1,13 @@
 # AGENTS.md
 
+## Development
+
+- Run the tests: `uv run pytest`
+- Run the typechecker: `uv run mypy` (configured in `pyproject.toml`; the tool is checked under `--strict`, test functions are exempt from annotation requirements but their bodies are still checked)
+- Run the tool: `./top-and-tail <source.mp3>`
+
+ffmpeg must be on `PATH`. The tool itself has no third-party runtime dependencies — `pytest`, `mutagen` and `mypy` are development dependencies only, and `mutagen` is permitted in tests as an independent oracle but never in the tool.
+
 ## Agent skills
 
 ### Issue tracker

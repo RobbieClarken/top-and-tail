@@ -9,10 +9,11 @@ import argparse
 import subprocess
 import sys
 from array import array
+from collections.abc import Sequence
 from pathlib import Path
 
 # Full scale for the signed 16-bit samples ffmpeg decodes for us.
-_FULL_SCALE = 32768
+_FULL_SCALE: int = 32768
 
 # Sources are decoded to mono at this rate purely for amplitude analysis; the
 # audio that actually gets written is copied frame for frame from the source.
@@ -23,12 +24,19 @@ DEFAULT_MIN_SILENCE = 0.1
 DEFAULT_PADDING = 0.050
 
 
-def _quiet_limit(threshold_db):
+def _quiet_limit(threshold_db: float) -> float:
     """The largest sample magnitude that still counts as quiet."""
-    return _FULL_SCALE * (10.0 ** (threshold_db / 20.0))
+    return float(_FULL_SCALE * 10.0 ** (threshold_db / 20.0))
 
 
-def find_bounds(samples, *, sample_rate, threshold_db, min_silence, padding):
+def find_bounds(
+    samples: Sequence[int],
+    *,
+    sample_rate: int,
+    threshold_db: float,
+    min_silence: float,
+    padding: float,
+) -> tuple[float, float] | None:
     """Locate the utterance, plus padding, within a buffer of samples.
 
     Returns a (start, end) pair in seconds, or None when the buffer holds no
@@ -63,7 +71,7 @@ def find_bounds(samples, *, sample_rate, threshold_db, min_silence, padding):
     return max(start, 0) / sample_rate, min(end, total) / sample_rate
 
 
-def decode(source):
+def decode(source: Path) -> "array[int]":
     """Decode a source to mono 16-bit samples for analysis."""
     result = subprocess.run(
         [
@@ -79,7 +87,9 @@ def decode(source):
     return samples
 
 
-def copy_frames(source, destination, start, end):
+def copy_frames(
+    source: Path, destination: Path, start: float, end: float
+) -> None:
     """Copy the frames between start and end into the destination.
 
     Frames are copied, never re-encoded, so the retained audio is
@@ -102,7 +112,14 @@ def copy_frames(source, destination, start, end):
     )
 
 
-def strip(source, destination, *, threshold_db, min_silence, padding):
+def strip(
+    source: Path,
+    destination: Path,
+    *,
+    threshold_db: float,
+    min_silence: float,
+    padding: float,
+) -> None:
     samples = decode(source)
     found = find_bounds(
         samples,
@@ -117,11 +134,11 @@ def strip(source, destination, *, threshold_db, min_silence, padding):
     copy_frames(source, destination, start, end)
 
 
-def default_destination(source):
+def default_destination(source: Path) -> Path:
     return source.with_suffix(".stripped.mp3")
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Strip leading and trailing silence from MP3 files.",
     )

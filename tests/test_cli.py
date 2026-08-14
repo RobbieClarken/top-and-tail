@@ -1,5 +1,6 @@
 """Seam 1: the CLI, invoked as a subprocess against real ffmpeg."""
 
+import re
 import subprocess
 from array import array
 
@@ -201,3 +202,76 @@ def test_the_muxer_rewrites_the_encoder_tag(hablar):
     stripped_tags = MP3(hablar.with_suffix(".stripped.mp3")).tags
     assert stripped_tags is not None
     assert stripped_tags["TSSE"].text != before
+
+
+def test_several_sources_are_each_stripped(tmp_path):
+    sources = [copy_fixture(name, tmp_path) for name in sorted(UTTERANCE_ENDS)]
+
+    result = run(*sources)
+
+    assert result.returncode == 0, result.stderr
+    for source in sources:
+        stripped = source.with_suffix(".stripped.mp3")
+        assert stripped.exists()
+        assert duration(stripped) < duration(source)
+
+
+def test_reports_a_line_per_source(hablar):
+    result = run(hablar)
+
+    # The shape the spec gives as its example:
+    #   hablar-….mp3  1.92s → 0.69s  (-64%)
+    line = result.stdout.strip()
+    assert hablar.name in line
+    assert "1.92s" in line
+    assert "0.69s" in line
+    assert "-64%" in line
+
+
+def test_a_summary_line_closes_a_batch(tmp_path):
+    sources = [copy_fixture(name, tmp_path) for name in sorted(UTTERANCE_ENDS)]
+
+    result = run(*sources)
+
+    lines = result.stdout.strip().splitlines()
+    assert len(lines) == 4, lines
+    # 1.04 + 1.92 + 2.48 in, 0.48 + 0.69 + 0.82 out.
+    summary = lines[-1]
+    assert "3 files" in summary
+    assert "5.44s" in summary
+    assert "2.00s" in summary
+    assert "-63%" in summary
+
+
+def test_a_single_source_gets_no_summary(hablar):
+    # A summary that just restates the one line above it is noise.
+    result = run(hablar)
+
+    assert len(result.stdout.strip().splitlines()) == 1
+
+
+def test_a_directory_source_is_rejected_rather_than_walked(hablar, tmp_path):
+    # hablar lives inside tmp_path, so a tool that walked the directory would
+    # strip it. Nothing should be produced.
+    result = run(tmp_path)
+
+    assert result.returncode != 0
+    assert "director" in result.stderr.lower()
+    assert str(tmp_path) in result.stderr
+    assert not hablar.with_suffix(".stripped.mp3").exists()
+    # A clear message, not a stack trace that happens to mention directories.
+    assert "Traceback" not in result.stderr
+
+
+def test_a_rerun_never_reports_the_file_growing(hablar):
+    # Guards the measurement choice: before and after must come from the same
+    # source of truth. Decoding one end and probing the other makes an already
+    # stripped file look like it grew.
+    run(hablar)
+
+    result = run(hablar.with_suffix(".stripped.mp3"))
+
+    reported = re.search(r"([\d.]+)s → ([\d.]+)s", result.stdout)
+    assert reported, result.stdout
+    before, after = float(reported.group(1)), float(reported.group(2))
+    assert after <= before

@@ -73,7 +73,7 @@ The user points it at one or more source files. By default each result is writte
 
 - A single executable file named after the command, with no file extension, so the symlink and the invoked name agree. Installed by symlinking it onto the user's `PATH`.
 - Python, run through `uv`'s inline script metadata via a `uv run --script` shebang. Verified working on the target machine's Python 3.13.5.
-- No third-party runtime dependencies; the standard library only. ffmpeg is the sole external dependency, and its absence must be detected and reported as a named error.
+- No third-party runtime dependencies; the standard library only. The external dependencies are ffmpeg and ffprobe, which ship together; the absence of either must be detected and reported as a named error. ffprobe supplies the durations in the report — measuring them by decoding instead would disagree with what every other tool says about a stripped file, because the gapless-playback info in the Xing header changes when frames are cut.
 - `pydub` is specifically excluded. It re-encodes on export, which defeats the lossless decision, and version 0.25.1 does not import on Python 3.13 at all because it depends on the `audioop` module removed by PEP 594. `numpy` is not needed at these file sizes; the standard library `array` module is sufficient for amplitude analysis.
 
 ### Detecting silence

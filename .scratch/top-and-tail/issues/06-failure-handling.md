@@ -16,3 +16,9 @@ One bad source does not stop the rest of the batch: the remaining sources are st
 - [ ] The process exits non-zero if any source failed, and zero when all succeeded — including when all were `unchanged`
 - [ ] A failure under `--inplace` leaves the source intact, with no temporary file left behind
 - [ ] End-to-end tests cover each failure mode and the mixed batch of good and bad sources
+
+## Comments
+
+**Scope note from ticket 02.** Reporting needs container durations, which come from `ffprobe`, so the tool now shells out to two binaries rather than one. The criterion "A missing ffmpeg is reported as a named error" should be read as covering **ffprobe too** — they ship together, but a minimal build can omit ffprobe, and its absence currently surfaces as an unhandled `FileNotFoundError`.
+
+Ticket 02 also established the shape for a clean rejection: a message on stderr naming the offending path, and no stack trace. `test_a_directory_source_is_rejected_rather_than_walked` asserts `"Traceback" not in stderr` — worth copying for the failure modes here, since an unhandled exception can otherwise pass a naive "non-zero exit and the right word in stderr" assertion.

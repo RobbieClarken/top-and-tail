@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # Full scale for the signed 16-bit samples ffmpeg decodes for us.
-_FULL_SCALE: int = 32768
+_FULL_SCALE = 32768
 
 # Sources are decoded to mono at this rate purely for amplitude analysis; the
 # audio that actually gets written is copied frame for frame from the source.
@@ -135,30 +135,41 @@ def copy_frames(
     )
 
 
-def report_line(label: str, before: float, after: float) -> str:
-    """One line of the report: what shrank, from what, to what, by how much."""
-    saved = 1.0 - after / before if before else 0.0
-    return f"{label}  {before:.2f}s → {after:.2f}s  ({-round(saved * 100)}%)"
-
-
 @dataclass(frozen=True)
 class Outcome:
-    """What stripping one source did, for reporting."""
+    """What stripping did to one source, or to a whole batch."""
 
-    source: Path
+    label: str
     before: float
     after: float
 
+    @classmethod
+    def for_source(cls, source: Path, before: float, after: float) -> "Outcome":
+        return cls(label=source.name, before=before, after=after)
+
+    @classmethod
+    def total(cls, outcomes: Sequence["Outcome"]) -> "Outcome":
+        return cls(
+            label=f"{len(outcomes)} files",
+            before=sum(outcome.before for outcome in outcomes),
+            after=sum(outcome.after for outcome in outcomes),
+        )
+
+    @property
+    def change(self) -> float:
+        """Fractional change in duration, negative when silence was removed."""
+        if not self.before:
+            return 0.0
+        return (self.after - self.before) / self.before
+
     def __str__(self) -> str:
-        return report_line(self.source.name, self.before, self.after)
-
-
-def summarise(outcomes: Sequence[Outcome]) -> str:
-    return report_line(
-        f"{len(outcomes)} files",
-        sum(outcome.before for outcome in outcomes),
-        sum(outcome.after for outcome in outcomes),
-    )
+        # The sign is always explicit: a file that somehow grew must not read
+        # like one that shrank by the same amount.
+        return (
+            f"{self.label}  "
+            f"{self.before:.2f}s → {self.after:.2f}s  "
+            f"({self.change * 100:+.0f}%)"
+        )
 
 
 def strip(
@@ -185,7 +196,7 @@ def strip(
 
     # Measured from the written file rather than from the bounds we asked for,
     # so the report states what is actually on disk after frame rounding.
-    return Outcome(source=source, before=before, after=probe_duration(destination))
+    return Outcome.for_source(source, before, probe_duration(destination))
 
 
 def default_destination(source: Path) -> Path:
@@ -224,7 +235,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # A summary that merely restates the single line above it is noise.
     if len(outcomes) > 1:
-        print(summarise(outcomes))
+        print(Outcome.total(outcomes))
     return 0
 
 

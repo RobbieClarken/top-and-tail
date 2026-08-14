@@ -24,3 +24,9 @@ Sources are explicit file paths only. Directories are not accepted and nothing i
 **A single source gets no summary line.** "A summary line closes a batch" reads as plural; restating the one line above it is noise. Pinned by `test_a_single_source_gets_no_summary`.
 
 **Directories exit 2**, matching argparse's convention for usage errors, and are rejected before any source is processed rather than part-way through. Ticket 06 owns the general non-zero-on-failure behaviour and may want a different code for source failures.
+
+**Review fixes.** The percentage could not express growth: `-round(saved * 100)` printed `(3%)` for a file that grew 3%, identical to a 3% saving — precisely the case `test_a_rerun_never_reports_the_file_growing` exists to catch. Now formatted as a signed change in duration, so the sign is always explicit.
+
+`report_line` and `summarise` were free functions taking exactly `Outcome`'s fields, with `__str__` delegating to the first and `summarise` faking an `Outcome` whose source path was the string `"3 files"`. Folded into the type as `Outcome.for_source` / `Outcome.total`, with `label` replacing the fake path.
+
+`AGENTS.md` still claimed ffmpeg was the only binary needed and showed a single-source invocation; both corrected.

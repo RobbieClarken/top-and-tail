@@ -216,16 +216,16 @@ def test_several_sources_are_each_stripped(tmp_path):
         assert duration(stripped) < duration(source)
 
 
-def test_reports_a_line_per_source(hablar):
+def test_reports_the_before_and_after_for_a_source(hablar):
     result = run(hablar)
 
-    # The shape the spec gives as its example:
+    # The format agreed during design:
     #   hablar-….mp3  1.92s → 0.69s  (-64%)
     line = result.stdout.strip()
     assert hablar.name in line
-    assert "1.92s" in line
-    assert "0.69s" in line
-    assert "-64%" in line
+    assert "1.92s → 0.69s" in line
+    # The sign is explicit, so growth could never read as a saving.
+    assert "(-64%)" in line
 
 
 def test_a_summary_line_closes_a_batch(tmp_path):

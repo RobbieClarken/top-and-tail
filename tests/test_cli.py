@@ -20,6 +20,7 @@ UTTERANCE_ENDS = {
     "yo-oWSxI36XAKnfMWmzmQok-eleven_v3.mp3": 0.404,
     "hablar-oWSxI36XAKnfMWmzmQok-eleven_v3.mp3": 0.617,
     "pretérito-oWSxI36XAKnfMWmzmQok-eleven_v3.mp3": 0.748,
+    "él-oWSxI36XAKnfMWmzmQok-eleven_v3.mp3": 0.291,
 }
 
 
@@ -248,7 +249,14 @@ def test_reports_the_before_and_after_for_a_source(hablar):
 
 
 def test_a_summary_line_closes_a_batch(tmp_path):
-    sources = [copy_fixture(name, tmp_path) for name in sorted(UTTERANCE_ENDS)]
+    # An explicit batch, so that adding a fixture cannot silently change what
+    # this test is asserting about the summary.
+    names = [
+        "yo-oWSxI36XAKnfMWmzmQok-eleven_v3.mp3",
+        "hablar-oWSxI36XAKnfMWmzmQok-eleven_v3.mp3",
+        "pretérito-oWSxI36XAKnfMWmzmQok-eleven_v3.mp3",
+    ]
+    sources = [copy_fixture(name, tmp_path) for name in names]
 
     result = run(*sources)
 
@@ -536,3 +544,18 @@ def test_an_unchanged_destination_keeps_its_own_mode(tmp_path):
     assert run("-o", named, silent).returncode == 0
 
     assert stat.S_IMODE(named.stat().st_mode) == 0o600
+
+
+def test_a_tail_artifact_does_not_defeat_trailing_silence(tmp_path):
+    """él ends with 11 stray samples in its final 3.1ms, peaking at -44.7 dBFS.
+
+    Scanning back from the last sample stopped on them immediately, so the
+    1.15s of silence in front was never seen and the file was left unchanged.
+    """
+    source = copy_fixture("él-oWSxI36XAKnfMWmzmQok-eleven_v3.mp3", tmp_path)
+
+    result = run(source)
+
+    assert result.returncode == 0, result.stderr
+    assert "unchanged" not in result.stdout
+    assert_stripped(source.with_suffix(".stripped.mp3"), seconds=0.366)

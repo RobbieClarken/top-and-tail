@@ -73,3 +73,21 @@ def test_samples_just_above_the_threshold_are_not_quiet():
 
 def test_a_buffer_that_is_silent_throughout_has_no_utterance():
     assert bounds(samples((QUIET, 100))) is None
+
+
+def test_a_brief_burst_after_silence_does_not_extend_the_utterance():
+    # A click or a decoder's ringing on the final frame is not speech, and
+    # must not hide the silence in front of it.
+    buffer = samples((LOUD, 20), (QUIET, 30), (LOUD, 3))
+    assert bounds(buffer) == approx((0.0, 0.025))
+
+
+def test_a_sustained_burst_after_silence_does_extend_the_utterance():
+    # Long enough to be real content, so the silence before it is internal.
+    buffer = samples((LOUD, 20), (QUIET, 30), (LOUD, 15))
+    assert bounds(buffer) == approx((0.0, 0.065))
+
+
+def test_a_brief_burst_before_silence_does_not_extend_the_utterance():
+    buffer = samples((LOUD, 3), (QUIET, 30), (LOUD, 20))
+    assert bounds(buffer) == approx((0.028, 0.053))

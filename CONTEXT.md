@@ -5,18 +5,22 @@ A command line tool that removes silence from the start and end of MP3 files, wi
 ## Language
 
 **Utterance**:
-The audible content of a source file — a single spoken vocabulary item. Everything the tool preserves.
+The audible content of a source file — a single spoken vocabulary item. Everything the tool preserves. An artifact does not extend it.
 _Avoid_: Speech, clip, sample
+
+**Artifact**:
+A burst of sound too brief to be speech, separated from the utterance by silence — a click, or a decoder ringing on a file's final frame. Judged by the same minimum silence run that decides what counts as silence, and stripped along with the silence around it.
+_Avoid_: Noise, glitch, blip
 
 **Silence**:
 A stretch of audio that stays below the silence threshold for at least the minimum silence run. Quiet that is too brief to clear the run length is not silence.
 _Avoid_: Quiet, blank, dead air
 
 **Leading silence**:
-Silence before the utterance begins. Stripped.
+Silence before the utterance begins. Stripped, along with any artifact in front of it.
 
 **Trailing silence**:
-Silence after the utterance ends. Stripped.
+Silence after the utterance ends. Stripped, along with any artifact behind it.
 
 **Internal silence**:
 Silence between two audible parts of the same utterance — the stop consonant in *pretérito*, for example. Never stripped; removing it would mangle the word.

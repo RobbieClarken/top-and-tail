@@ -38,3 +38,11 @@ Covered instead by three tests, which together exceed what the original criterio
 **Also found:** ffmpeg's mp3 muxer always rewrites the `encoder` (`TSSE`) tag, so the sources' only shipped tag is replaced rather than carried. Neither `-bitexact` (drops every tag) nor an explicit `-metadata` override prevents it. User-set tags such as `TIT2`/`TPE1` do survive. This contradicts the parent spec's "carried across unmodified; nothing is added, removed or rewritten" and needs a decision — see `test_the_muxer_rewrites_the_encoder_tag`, which pins the current behaviour.
 
 **Deferred:** ADR-0001 requires the `min-silence > padding + 26 ms` invariant to be "validated at startup". Ticket 05 owns the flags that make it violable; no validation exists yet.
+
+**Bug found later: a tail artifact defeated trailing-silence detection.**
+
+`find_bounds` scanned back from the very last sample and stopped at the first thing above the threshold, so trailing silence was only ever found if it reached the end of the buffer. The `él` fixture ends with eleven stray samples in its final 3.1 ms, peaking at −44.7 dBFS — 0.017% of the file — and that was enough to hide 1.15 s of silence and report the whole thing as unchanged. `hablar` only escaped by luck: its final samples measure 1 to 3, far below the limit.
+
+Fixed by judging sound the same way as quiet: a burst shorter than the minimum silence run, cut off from the utterance by silence, is an artifact rather than speech. The rule is symmetric, so a click at the start cannot hide leading silence either. No new setting — the existing minimum silence run is the yardstick.
+
+`find_bounds` now works from the maximal runs of quiet rather than scanning inward from each edge, which made the rule expressible without a second pass. All twelve original unit cases pass unchanged. New terms in `CONTEXT.md`: **Artifact**.

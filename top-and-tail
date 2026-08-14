@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 from array import array
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +34,22 @@ def _quiet_limit(threshold_db: float) -> float:
     return float(_FULL_SCALE * 10.0 ** (threshold_db / 20.0))
 
 
+def _quiet_runs(
+    samples: Sequence[int], limit: float
+) -> Iterator[tuple[int, int]]:
+    """Yield the half-open bounds of every maximal run of quiet samples."""
+    start = None
+    for index, sample in enumerate(samples):
+        if abs(sample) < limit:
+            if start is None:
+                start = index
+        elif start is not None:
+            yield start, index
+            start = None
+    if start is not None:
+        yield start, len(samples)
+
+
 def find_bounds(
     samples: Sequence[int],
     *,
@@ -47,33 +63,43 @@ def find_bounds(
     Returns a (start, end) pair in seconds, or None when the buffer holds no
     utterance at all. Only the leading and trailing silence are candidates for
     stripping — quiet anywhere else is internal silence and is left alone.
+
+    Sound is judged by the same yardstick as quiet: just as quiet shorter than
+    the minimum silence run is not silence, a burst of sound shorter than it,
+    cut off from the utterance by silence, is an artifact rather than speech.
+    Without that rule a single click at the end of a file — or a decoder
+    ringing on the final frame — hides all the silence in front of it.
     """
     total = len(samples)
-    limit = _quiet_limit(threshold_db)
-
-    # Sample indices bounding the audible content: the first audible sample,
-    # and the one just past the last.
-    utterance_start = 0
-    while utterance_start < total and abs(samples[utterance_start]) < limit:
-        utterance_start += 1
-
-    if utterance_start == total:
+    if not total:
         return None
 
-    utterance_end = total
-    while abs(samples[utterance_end - 1]) < limit:
-        utterance_end -= 1
-
+    limit = _quiet_limit(threshold_db)
     min_samples = round(min_silence * sample_rate)
     pad_samples = round(padding * sample_rate)
 
-    leading_quiet = utterance_start
-    trailing_quiet = total - utterance_end
+    runs = list(_quiet_runs(samples, limit))
+    if runs == [(0, total)]:
+        return None
 
-    start = utterance_start - pad_samples if leading_quiet >= min_samples else 0
-    end = utterance_end + pad_samples if trailing_quiet >= min_samples else total
+    silences = [run for run in runs if run[1] - run[0] >= min_samples]
 
-    return max(start, 0) / sample_rate, min(end, total) / sample_rate
+    # The utterance runs from the end of the leading silence to the start of
+    # the trailing one. A silence only counts as leading or trailing if what
+    # lies outside it is too brief to be speech.
+    utterance_start = 0
+    utterance_end = total
+    if silences:
+        first_start, first_end = silences[0]
+        if first_start < min_samples:
+            utterance_start = first_end
+        last_start, last_end = silences[-1]
+        if total - last_end < min_samples:
+            utterance_end = last_start
+
+    start = max(utterance_start - pad_samples, 0)
+    end = min(utterance_end + pad_samples, total)
+    return start / sample_rate, end / sample_rate
 
 
 def decode(source: Path) -> "array[int]":

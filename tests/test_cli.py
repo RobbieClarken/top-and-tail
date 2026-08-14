@@ -1,7 +1,6 @@
 """Seam 1: the CLI, invoked as a subprocess against real ffmpeg."""
 
 import os
-import re
 import stat
 import subprocess
 from array import array
@@ -270,18 +269,20 @@ def test_a_directory_source_is_rejected_rather_than_walked(hablar, tmp_path):
     assert "Traceback" not in result.stderr
 
 
-def test_a_rerun_never_reports_the_file_growing(hablar):
-    # Guards the measurement choice: before and after must come from the same
-    # source of truth. Decoding one end and probing the other makes an already
-    # stripped file look like it grew.
+def test_a_rerun_reports_unchanged_rather_than_growth(hablar):
+    """A second pass must not nibble, and must not claim the file grew.
+
+    Until ticket 04 this could only be checked numerically — measuring one end
+    by decoding and the other by probing made an already stripped file look
+    like it had grown. A rerun now short-circuits to `unchanged`, which says
+    the same thing more strongly.
+    """
     run(hablar)
 
-    result = run(hablar.with_suffix(".stripped.mp3"))
+    result = run("--inplace", hablar.with_suffix(".stripped.mp3"))
 
-    reported = re.search(r"([\d.]+)s → ([\d.]+)s", result.stdout)
-    assert reported, result.stdout
-    before, after = float(reported.group(1)), float(reported.group(2))
-    assert after <= before
+    assert "unchanged" in result.stdout
+    assert "→" not in result.stdout
 
 
 def test_inplace_replaces_the_source(hablar):
@@ -434,3 +435,79 @@ def test_inplace_handles_several_sources(tmp_path):
     for source in sources:
         assert duration(source) < originals[source]
         assert not source.with_suffix(".stripped.mp3").exists()
+
+
+def test_a_source_with_nothing_to_strip_is_reported_unchanged(hablar):
+    run(hablar)
+    stripped = hablar.with_suffix(".stripped.mp3")
+
+    result = run("--inplace", stripped)
+
+    assert result.returncode == 0, result.stderr
+    assert "unchanged" in result.stdout
+
+
+def make_silent_mp3(path, seconds=1.0):
+    subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-y",
+            "-f", "lavfi", "-i", f"anullsrc=r={RATE}:cl=mono",
+            "-t", str(seconds), "-c:a", "libmp3lame", "-b:a", "128k",
+            str(path),
+        ],
+        check=True,
+    )
+    return path
+
+
+def test_a_silent_source_is_unchanged_and_never_truncated(tmp_path):
+    # A file with no utterance is almost certainly a failed generation. Keep
+    # it for inspection rather than truncating it to nothing.
+    silent = make_silent_mp3(tmp_path / "silent.mp3")
+    original = silent.read_bytes()
+
+    result = run(silent)
+
+    assert result.returncode == 0, result.stderr
+    assert "unchanged" in result.stdout
+    assert silent.read_bytes() == original
+    assert silent.with_suffix(".stripped.mp3").read_bytes() == original
+
+
+def test_an_unchanged_outcome_still_writes_the_destination(hablar, tmp_path):
+    silent = make_silent_mp3(tmp_path / "silent.mp3")
+    named = tmp_path / "chosen.mp3"
+
+    assert run("-o", named, silent).returncode == 0
+
+    # An exact copy, so a batch's output set is complete either way.
+    assert named.read_bytes() == silent.read_bytes()
+
+
+def test_inplace_leaves_an_unchanged_source_untouched(hablar):
+    run("--inplace", hablar)
+    settled = hablar.stat()
+
+    result = run("--inplace", hablar)
+
+    assert "unchanged" in result.stdout
+    assert hablar.stat().st_mtime_ns == settled.st_mtime_ns
+
+
+def test_a_batch_of_unchanged_sources_exits_zero(tmp_path):
+    silents = [make_silent_mp3(tmp_path / f"s{n}.mp3") for n in range(3)]
+
+    result = run(*silents)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("unchanged") == 4  # three sources plus summary
+
+
+def test_a_second_run_is_byte_identical_to_the_first(hablar):
+    run(hablar)
+    stripped = hablar.with_suffix(".stripped.mp3")
+    first = stripped.read_bytes()
+
+    assert run("--inplace", stripped).returncode == 0
+
+    assert stripped.read_bytes() == first

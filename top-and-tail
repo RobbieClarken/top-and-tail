@@ -7,6 +7,7 @@
 
 import argparse
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -175,10 +176,15 @@ class Outcome:
     label: str
     before: float
     after: float
+    unchanged: bool = False
 
     @classmethod
-    def for_source(cls, source: Path, before: float, after: float) -> "Outcome":
-        return cls(label=source.name, before=before, after=after)
+    def for_source(
+        cls, source: Path, before: float, after: float, *, unchanged: bool = False
+    ) -> "Outcome":
+        return cls(
+            label=source.name, before=before, after=after, unchanged=unchanged
+        )
 
     @classmethod
     def total(cls, outcomes: Sequence["Outcome"]) -> "Outcome":
@@ -186,6 +192,7 @@ class Outcome:
             label=f"{len(outcomes)} files",
             before=sum(outcome.before for outcome in outcomes),
             after=sum(outcome.after for outcome in outcomes),
+            unchanged=all(outcome.unchanged for outcome in outcomes),
         )
 
     @property
@@ -196,6 +203,10 @@ class Outcome:
         return (self.after - self.before) / self.before
 
     def __str__(self) -> str:
+        # Reported rather than hidden, so a repeat run visibly confirms that
+        # the tool is idempotent instead of looking like it did nothing.
+        if self.unchanged:
+            return f"{self.label}  {self.before:.2f}s  unchanged"
         # The sign is always explicit: a file that somehow grew must not read
         # like one that shrank by the same amount.
         return (
@@ -203,6 +214,18 @@ class Outcome:
             f"{self.before:.2f}s → {self.after:.2f}s  "
             f"({self.change * 100:+.0f}%)"
         )
+
+
+def keep_unchanged(source: Path, destination: Path) -> None:
+    """Leave an unstrippable source alone, but still produce the destination.
+
+    Writing the destination keeps a batch's output set complete regardless of
+    which sources needed work. The exception is an in-place strip, where the
+    destination is the source: rewriting it with identical bytes would bump
+    the mtime and wake every file watcher for no reason.
+    """
+    if destination != source.resolve():
+        shutil.copy2(source, destination)
 
 
 def strip(
@@ -222,9 +245,16 @@ def strip(
         min_silence=min_silence,
         padding=padding,
     )
-    # A source with no utterance is kept whole rather than truncated to
-    # nothing. Reporting it as unchanged belongs to a later ticket.
-    start, end = found if found else (0.0, len(samples) / ANALYSIS_RATE)
+
+    # Nothing to strip covers two cases: a source that is silent throughout,
+    # which must be preserved rather than truncated to nothing, and one whose
+    # quiet is too brief to be silence.
+    whole = len(samples) / ANALYSIS_RATE
+    if found is None or found == (0.0, whole):
+        keep_unchanged(source, destination)
+        return Outcome.for_source(source, before, before, unchanged=True)
+
+    start, end = found
     write_atomically(source, destination, start, end)
 
     # Measured from the written file rather than from the bounds we asked for,

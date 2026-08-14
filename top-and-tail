@@ -7,6 +7,7 @@
 
 import argparse
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -145,16 +146,26 @@ def write_atomically(
     The temporary lives in the destination's own directory so the rename stays
     on one filesystem and is therefore atomic. An interrupted run leaves the
     destination as it was rather than truncated, which is what makes it safe
-    to point a destination at its own source.
+    for a destination to be its own source.
     """
-    handle, temporary = tempfile.mkstemp(dir=destination.parent, suffix=".mp3")
+    # mkstemp creates at 0600, and the rename would carry that onto the
+    # destination — silently making a 0644 file owner-only. Keep whatever mode
+    # the destination already had, or failing that the source's.
+    existing = destination if destination.exists() else source
+    mode = stat.S_IMODE(existing.stat().st_mode)
+
+    handle, path = tempfile.mkstemp(dir=destination.parent, suffix=".mp3")
     os.close(handle)
-    scratch = Path(temporary)
+    scratch = Path(path)
     try:
         copy_frames(source, scratch, start, end)
+        scratch.chmod(mode)
         os.replace(scratch, destination)
-    finally:
+    except BaseException:
+        # Only on the failure path: after a successful rename the name is gone,
+        # and unlinking it could remove a file another run has just created.
         scratch.unlink(missing_ok=True)
+        raise
 
 
 @dataclass(frozen=True)
@@ -221,16 +232,20 @@ def strip(
     return Outcome.for_source(source, before, probe_duration(destination))
 
 
-def default_destination(source: Path) -> Path:
-    return source.with_suffix(".stripped.mp3")
+def destination_for(
+    source: Path, *, inplace: bool, named: Path | None
+) -> Path:
+    """Where one source's result should be written.
 
-
-def destination_for(source: Path, inplace: bool, output: Path | None) -> Path:
+    Always resolved, so a destination reached through a symlink is recognised
+    as the file it points at. Without that, writing to a link that points at
+    the source would replace the link and leave the source untouched.
+    """
     if inplace:
-        return source
-    if output is not None:
-        return output
-    return default_destination(source)
+        return source.resolve()
+    if named is not None:
+        return named.resolve()
+    return source.with_suffix(".stripped.mp3").resolve()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -277,7 +292,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     outcomes = []
     for source in args.sources:
-        destination = destination_for(source, args.inplace, args.output)
+        destination = destination_for(
+            source, inplace=args.inplace, named=args.output
+        )
         outcome = strip(
             source,
             destination,

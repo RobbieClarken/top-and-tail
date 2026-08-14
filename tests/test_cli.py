@@ -2,6 +2,7 @@
 
 import os
 import re
+import stat
 import subprocess
 from array import array
 
@@ -57,6 +58,11 @@ def audio_length(path):
     across, so the container duration reads that much longer than the audio.
     """
     return duration(path) - _probe(path, "stream=start_time")
+
+
+def assert_stripped(path, seconds=0.692):
+    """The fixture durations after stripping, within frame-rounding slack."""
+    assert abs(duration(path) - seconds) < 0.03, duration(path)
 
 
 def pcm(path):
@@ -354,16 +360,6 @@ def test_a_destination_that_is_its_own_source_strips_in_place(hablar):
     assert [p.name for p in hablar.parent.iterdir()] == [hablar.name]
 
 
-def test_inplace_writes_via_a_temporary_and_renames(hablar):
-    # A rename swaps in a different file, so the inode changes. Writing over
-    # the source directly would keep it — and would truncate on failure.
-    before = hablar.stat().st_ino
-
-    assert run("--inplace", hablar).returncode == 0
-
-    assert hablar.stat().st_ino != before
-
-
 @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
 def test_a_failed_inplace_write_leaves_the_source_intact(hablar):
     original = hablar.read_bytes()
@@ -375,3 +371,66 @@ def test_a_failed_inplace_write_leaves_the_source_intact(hablar):
 
     assert result.returncode != 0
     assert hablar.read_bytes() == original
+
+
+def test_output_through_a_symlink_to_the_source_strips_the_target(hablar):
+    # Overwriting the link instead of following it would destroy the link and
+    # leave the source unstripped.
+    link = hablar.parent / "link.mp3"
+    link.symlink_to(hablar.name)
+
+    result = run("-o", link, hablar)
+
+    assert result.returncode == 0, result.stderr
+    assert link.is_symlink()
+    assert_stripped(hablar)
+
+
+def test_inplace_through_a_symlink_strips_the_target(hablar):
+    link = hablar.parent / "link.mp3"
+    link.symlink_to(hablar.name)
+
+    assert run("--inplace", link).returncode == 0
+
+    assert link.is_symlink()
+    assert_stripped(hablar)
+
+
+def test_inplace_keeps_the_source_file_mode(hablar):
+    # mkstemp creates at 0600; a careless rename would make the file
+    # owner-only.
+    hablar.chmod(0o644)
+
+    assert run("--inplace", hablar).returncode == 0
+
+    assert stat.S_IMODE(hablar.stat().st_mode) == 0o644
+
+
+def test_a_new_destination_takes_the_source_file_mode(hablar):
+    hablar.chmod(0o644)
+
+    assert run(hablar).returncode == 0
+
+    stripped = hablar.with_suffix(".stripped.mp3")
+    assert stat.S_IMODE(stripped.stat().st_mode) == 0o644
+
+
+def test_an_overwritten_destination_keeps_its_own_mode(hablar, tmp_path):
+    named = tmp_path / "chosen.mp3"
+    named.write_bytes(b"placeholder")
+    named.chmod(0o600)
+
+    assert run("-o", named, hablar).returncode == 0
+
+    assert stat.S_IMODE(named.stat().st_mode) == 0o600
+
+
+def test_inplace_handles_several_sources(tmp_path):
+    sources = [copy_fixture(name, tmp_path) for name in sorted(UTTERANCE_ENDS)]
+    originals = {source: duration(source) for source in sources}
+
+    assert run("--inplace", *sources).returncode == 0
+
+    for source in sources:
+        assert duration(source) < originals[source]
+        assert not source.with_suffix(".stripped.mp3").exists()

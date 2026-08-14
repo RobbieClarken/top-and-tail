@@ -1,0 +1,133 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.13"
+# dependencies = []
+# ///
+"""Strip leading and trailing silence from MP3 files without re-encoding."""
+
+import argparse
+import subprocess
+import sys
+from array import array
+from pathlib import Path
+
+# Full scale for the signed 16-bit samples ffmpeg decodes for us.
+_FULL_SCALE = 32768
+
+# Sources are decoded to mono at this rate purely for amplitude analysis; the
+# audio that actually gets written is copied frame for frame from the source.
+ANALYSIS_RATE = 44100
+
+DEFAULT_THRESHOLD_DB = -50.0
+DEFAULT_MIN_SILENCE = 0.1
+DEFAULT_PADDING = 0.050
+
+
+def _quiet_limit(threshold_db):
+    """The largest sample magnitude that still counts as quiet."""
+    return _FULL_SCALE * (10.0 ** (threshold_db / 20.0))
+
+
+def find_bounds(samples, *, sample_rate, threshold_db, min_silence, padding):
+    """Locate the utterance, plus padding, within a buffer of samples.
+
+    Returns a (start, end) pair in seconds, or None when the buffer holds no
+    utterance at all. Only the leading and trailing silence are candidates for
+    stripping — quiet anywhere else is internal silence and is left alone.
+    """
+    total = len(samples)
+    limit = _quiet_limit(threshold_db)
+
+    lead = 0
+    while lead < total and abs(samples[lead]) <= limit:
+        lead += 1
+
+    if lead == total:
+        return None
+
+    trail = total
+    while trail > lead and abs(samples[trail - 1]) <= limit:
+        trail -= 1
+
+    min_samples = round(min_silence * sample_rate)
+    pad_samples = round(padding * sample_rate)
+
+    start = lead - pad_samples if lead >= min_samples else 0
+    end = trail + pad_samples if total - trail >= min_samples else total
+
+    return max(start, 0) / sample_rate, min(end, total) / sample_rate
+
+
+def decode(source):
+    """Decode a source to mono 16-bit samples for analysis."""
+    result = subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-i", str(source),
+            "-ac", "1", "-ar", str(ANALYSIS_RATE), "-f", "s16le", "-",
+        ],
+        capture_output=True,
+        check=True,
+    )
+    samples = array("h", result.stdout)
+    if sys.byteorder == "big":
+        samples.byteswap()
+    return samples
+
+
+def cut(source, destination, start, end):
+    """Copy the frames between start and end into the destination.
+
+    Frames are copied, never re-encoded, so the retained audio is
+    bit-identical to the source. Cut points quantise to the frame size.
+    """
+    subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-y",
+            "-ss", f"{start:.6f}", "-to", f"{end:.6f}",
+            "-i", str(source),
+            "-c", "copy", "-map_metadata", "0",
+            str(destination),
+        ],
+        capture_output=True,
+        check=True,
+    )
+
+
+def strip(source, destination, *, threshold_db, min_silence, padding):
+    samples = decode(source)
+    found = find_bounds(
+        samples,
+        sample_rate=ANALYSIS_RATE,
+        threshold_db=threshold_db,
+        min_silence=min_silence,
+        padding=padding,
+    )
+    # A source with no utterance is kept whole rather than truncated to
+    # nothing. Reporting it as unchanged belongs to a later ticket.
+    start, end = found if found else (0.0, len(samples) / ANALYSIS_RATE)
+    cut(source, destination, start, end)
+
+
+def default_destination(source):
+    return source.with_suffix(".stripped.mp3")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Strip leading and trailing silence from MP3 files.",
+    )
+    parser.add_argument("source", type=Path)
+    args = parser.parse_args(argv)
+
+    strip(
+        args.source,
+        default_destination(args.source),
+        threshold_db=DEFAULT_THRESHOLD_DB,
+        min_silence=DEFAULT_MIN_SILENCE,
+        padding=DEFAULT_PADDING,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

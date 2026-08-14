@@ -28,6 +28,13 @@ DEFAULT_THRESHOLD_DB = -50.0
 DEFAULT_MIN_SILENCE = 0.1
 DEFAULT_PADDING = 0.050
 
+# ffmpeg decodes and copies frames; ffprobe supplies the reported durations.
+REQUIRED_TOOLS = ("ffmpeg", "ffprobe")
+
+
+class Failure(Exception):
+    """A problem with one source, reported to the user without a stack trace."""
+
 
 def _quiet_limit(threshold_db: float) -> float:
     """The largest sample magnitude that still counts as quiet."""
@@ -106,14 +113,17 @@ def find_bounds(
 
 def decode(source: Path) -> "array[int]":
     """Decode a source to mono 16-bit samples for analysis."""
-    result = subprocess.run(
-        [
-            "ffmpeg", "-v", "error", "-i", str(source),
-            "-ac", "1", "-ar", str(ANALYSIS_RATE), "-f", "s16le", "-",
-        ],
-        capture_output=True,
-        check=True,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-i", str(source),
+                "-ac", "1", "-ar", str(ANALYSIS_RATE), "-f", "s16le", "-",
+            ],
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as error:
+        raise Failure("not a readable MP3") from error
     samples = array("h", result.stdout)
     if sys.byteorder == "big":
         samples.byteswap()
@@ -128,18 +138,24 @@ def probe_duration(path: Path) -> float:
     both ends of a report the same way is what stops a re-run of an already
     stripped file claiming the file grew.
     """
-    result = subprocess.run(
-        [
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return float(result.stdout.strip())
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as error:
+        raise Failure("not a readable MP3") from error
+    try:
+        return float(result.stdout.strip())
+    except ValueError as error:
+        raise Failure("its duration could not be read") from error
 
 
 def copy_frames(
@@ -154,17 +170,20 @@ def copy_frames(
     muxer always stamps its own `encoder` tag, and neither -bitexact (which
     drops every tag) nor an explicit -metadata override prevents it.
     """
-    subprocess.run(
-        [
-            "ffmpeg", "-v", "error", "-y",
-            "-ss", f"{start:.6f}", "-to", f"{end:.6f}",
-            "-i", str(source),
-            "-c", "copy", "-map_metadata", "0",
-            str(destination),
-        ],
-        capture_output=True,
-        check=True,
-    )
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-v", "error", "-y",
+                "-ss", f"{start:.6f}", "-to", f"{end:.6f}",
+                "-i", str(source),
+                "-c", "copy", "-map_metadata", "0",
+                str(destination),
+            ],
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as error:
+        raise Failure("ffmpeg could not copy its frames") from error
 
 
 def copy_bytes(source: Path, destination: Path) -> None:
@@ -175,6 +194,10 @@ def copy_bytes(source: Path, destination: Path) -> None:
 def is_same_file(source: Path, destination: Path) -> bool:
     """Whether both names refer to one file — identity, symlink or hard link."""
     return destination.exists() and destination.samefile(source)
+
+
+def _unwritable(destination: Path, error: OSError) -> Failure:
+    return Failure(f"cannot write {destination}: {error.strerror}")
 
 
 def place(
@@ -194,17 +217,22 @@ def place(
     existing = destination if destination.exists() else source
     mode = stat.S_IMODE(existing.stat().st_mode)
 
-    handle, path = tempfile.mkstemp(dir=destination.parent, suffix=".mp3")
+    try:
+        handle, path = tempfile.mkstemp(dir=destination.parent, suffix=".mp3")
+    except OSError as error:
+        raise _unwritable(destination, error) from error
     os.close(handle)
     scratch = Path(path)
     try:
         produce(scratch)
         scratch.chmod(mode)
         os.replace(scratch, destination)
-    except BaseException:
+    except BaseException as error:
         # Only on the failure path: after a successful rename the name is gone,
         # and unlinking it could remove a file another run has just created.
         scratch.unlink(missing_ok=True)
+        if isinstance(error, OSError):
+            raise _unwritable(destination, error) from error
         raise
 
 
@@ -343,6 +371,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # Checked once, up front: without these nothing can succeed, and repeating
+    # the same message for every source would be noise.
+    missing = [name for name in REQUIRED_TOOLS if shutil.which(name) is None]
+    if missing:
+        print(
+            f"{' and '.join(missing)} not found on PATH — "
+            f"top-and-tail needs ffmpeg installed",
+            file=sys.stderr,
+        )
+        return 2
+
     # Sources are explicit file paths. Directories are never walked, so being
     # handed one is a usage error rather than something to recurse into.
     directories = [source for source in args.sources if source.is_dir()]
@@ -365,23 +404,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     outcomes = []
+    failures = 0
     for source in args.sources:
-        destination = destination_for(
-            source, inplace=args.inplace, named=args.output
-        )
-        outcome = strip(
-            source,
-            destination,
-            threshold_db=DEFAULT_THRESHOLD_DB,
-            min_silence=DEFAULT_MIN_SILENCE,
-            padding=DEFAULT_PADDING,
-        )
+        # One bad source must not stop the rest of the batch: a single failed
+        # download should not block everything generated alongside it.
+        try:
+            if not source.is_file():
+                raise Failure("no such file")
+            destination = destination_for(
+                source, inplace=args.inplace, named=args.output
+            )
+            outcome = strip(
+                source,
+                destination,
+                threshold_db=DEFAULT_THRESHOLD_DB,
+                min_silence=DEFAULT_MIN_SILENCE,
+                padding=DEFAULT_PADDING,
+            )
+        except Failure as failure:
+            print(f"{source}: {failure}", file=sys.stderr)
+            failures += 1
+            continue
         print(outcome)
         outcomes.append(outcome)
 
     # A summary that merely restates the single line above it is noise.
     if len(outcomes) > 1:
         print(Outcome.total(outcomes))
+
+    if failures:
+        print(
+            f"{failures} of {len(args.sources)} sources failed", file=sys.stderr
+        )
+        return 1
     return 0
 
 

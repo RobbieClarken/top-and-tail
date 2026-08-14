@@ -1,6 +1,7 @@
 """Seam 1: the CLI, invoked as a subprocess against real ffmpeg."""
 
 import os
+import shutil
 import stat
 import subprocess
 from array import array
@@ -618,3 +619,85 @@ def test_a_source_of_nothing_but_artifacts_is_unchanged(tmp_path):
     assert "Traceback" not in result.stderr
     assert "unchanged" in result.stdout
     assert clicks.read_bytes() == original
+
+
+def test_a_missing_source_is_reported(tmp_path):
+    result = run(tmp_path / "nope.mp3")
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "nope.mp3" in result.stderr
+
+
+def test_a_corrupt_source_is_reported(tmp_path):
+    broken = tmp_path / "broken.mp3"
+    broken.write_bytes(b"this is not an mp3" * 64)
+
+    result = run(broken)
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "broken.mp3" in result.stderr
+    assert not broken.with_suffix(".stripped.mp3").exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_an_unwritable_destination_is_reported(hablar, tmp_path):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o555)
+    try:
+        result = run("-o", locked / "out.mp3", hablar)
+    finally:
+        locked.chmod(0o755)
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert duration(hablar) > 1.9
+    assert list(locked.iterdir()) == []
+
+
+def test_one_bad_source_does_not_stop_the_others(hablar, tmp_path):
+    broken = tmp_path / "broken.mp3"
+    broken.write_bytes(b"not an mp3" * 64)
+
+    result = run(broken, hablar)
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "broken.mp3" in result.stderr
+    # The good source was still stripped.
+    assert_stripped(hablar.with_suffix(".stripped.mp3"))
+
+
+def test_a_failed_inplace_run_leaves_no_temporary_behind(hablar, tmp_path):
+    broken = tmp_path / "broken.mp3"
+    broken.write_bytes(b"not an mp3" * 64)
+
+    assert run("--inplace", broken).returncode != 0
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "broken.mp3",
+        hablar.name,
+    ]
+
+
+def test_missing_dependencies_are_reported_by_name(hablar, tmp_path):
+    # A PATH holding only uv, so the shebang still resolves but ffmpeg does not.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = shutil.which("uv")
+    assert uv, "uv is needed to run the tool"
+    (bin_dir / "uv").symlink_to(uv)
+
+    result = subprocess.run(
+        [str(TOOL), str(hablar)],
+        capture_output=True,
+        text=True,
+        env={"PATH": str(bin_dir), "HOME": os.environ["HOME"]},
+    )
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert "ffmpeg" in result.stderr
+    assert not hablar.with_suffix(".stripped.mp3").exists()

@@ -783,3 +783,95 @@ def test_a_single_failing_source_gets_no_failure_summary(tmp_path):
 
     assert result.returncode == 1
     assert "sources failed" not in result.stderr
+
+
+def test_a_lower_threshold_strips_more(hablar, tmp_path):
+    default = tmp_path / "default.mp3"
+    lenient = tmp_path / "lenient.mp3"
+
+    assert run("-o", default, hablar).returncode == 0
+    assert run("--threshold", "-20", "-o", lenient, hablar).returncode == 0
+
+    # At -20 dBFS far more of the audio counts as quiet, so more is stripped.
+    assert duration(lenient) < duration(default)
+
+
+def test_more_padding_keeps_more(hablar, tmp_path):
+    default = tmp_path / "default.mp3"
+    padded = tmp_path / "padded.mp3"
+
+    assert run("-o", default, hablar).returncode == 0
+    assert run("--padding", "0.3", "--min-silence", "0.4", "-o", padded, hablar).returncode == 0
+
+    assert duration(padded) > duration(default)
+
+
+# With 50ms of padding the invariant demands a minimum silence run above
+# 0.05 + 0.0261224 = 0.0761224s. Straddle that to the tenth of a millisecond.
+@pytest.mark.parametrize(
+    ("min_silence", "accepted"),
+    [
+        ("0.0761", False),
+        (repr(0.05 + 1152 / 44100), False),  # exactly on the boundary
+        ("0.0762", True),
+        ("0.10", True),
+    ],
+)
+def test_the_padding_invariant_is_enforced_at_startup(
+    min_silence, accepted, hablar
+):
+    result = run("--padding", "0.05", "--min-silence", min_silence, hablar)
+
+    if accepted:
+        assert result.returncode == 0, result.stderr
+    else:
+        assert result.returncode == 2
+        assert "Traceback" not in result.stderr
+        # Rejected before any source is read.
+        assert not hablar.with_suffix(".stripped.mp3").exists()
+
+
+def test_dry_run_reports_what_a_real_run_would(hablar, tmp_path):
+    dry = run("--dry-run", "-o", tmp_path / "out.mp3", hablar)
+    real = run("-o", tmp_path / "out.mp3", hablar)
+
+    assert dry.returncode == 0, dry.stderr
+    assert real.returncode == 0, real.stderr
+    reported = [line for line in dry.stdout.splitlines() if "dry run" not in line]
+    assert reported == real.stdout.splitlines()
+
+
+def test_dry_run_says_nothing_was_written(hablar):
+    result = run("--dry-run", hablar)
+
+    assert "nothing was written" in result.stdout
+
+
+@pytest.mark.parametrize("mode", [[], ["--inplace"], ["-o", "chosen.mp3"]])
+def test_dry_run_writes_nothing(mode, hablar):
+    mode = [str(hablar.parent / m) if m.endswith(".mp3") else m for m in mode]
+    listing = sorted(p.name for p in hablar.parent.iterdir())
+    settled = hablar.stat().st_mtime_ns
+
+    result = run("--dry-run", *mode, hablar)
+
+    assert result.returncode == 0, result.stderr
+    assert sorted(p.name for p in hablar.parent.iterdir()) == listing
+    assert hablar.stat().st_mtime_ns == settled
+
+
+def test_dry_run_reports_unchanged_sources(tmp_path):
+    silent = make_silent_mp3(tmp_path / "silent.mp3")
+
+    result = run("--dry-run", silent)
+
+    assert result.returncode == 0, result.stderr
+    assert "unchanged" in result.stdout
+    assert not silent.with_suffix(".stripped.mp3").exists()
+
+
+def test_dry_run_exit_code_matches_a_real_run(tmp_path):
+    broken = tmp_path / "broken.mp3"
+    broken.write_bytes(b"not an mp3" * 64)
+
+    assert run("--dry-run", broken).returncode == run(broken).returncode == 1

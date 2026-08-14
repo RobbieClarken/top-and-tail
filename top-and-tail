@@ -28,6 +28,9 @@ DEFAULT_THRESHOLD_DB = -50.0
 DEFAULT_MIN_SILENCE = 0.1
 DEFAULT_PADDING = 0.050
 
+# An MP3 frame at the analysis rate: the granularity a cut can land on.
+FRAME_DURATION = 1152 / ANALYSIS_RATE
+
 # ffmpeg decodes and copies frames; ffprobe supplies the reported durations.
 REQUIRED_TOOLS = ("ffmpeg", "ffprobe")
 
@@ -309,6 +312,20 @@ def keep_unchanged(source: Path, destination: Path) -> None:
     place(source, destination, lambda scratch: copy_bytes(source, scratch))
 
 
+def preview(source: Path, start: float, end: float) -> float:
+    """How long the result would be, without writing anything the user sees.
+
+    The cut is performed for real, into the system temporary directory rather
+    than beside the destination, so the reported duration is the one a real run
+    would produce — frame rounding included — while leaving no trace in the
+    user's own directories for a file watcher to notice.
+    """
+    with tempfile.TemporaryDirectory() as scratch_dir:
+        scratch = Path(scratch_dir) / "preview.mp3"
+        copy_frames(source, scratch, start, end)
+        return probe_duration(scratch)
+
+
 def strip(
     source: Path,
     destination: Path,
@@ -316,6 +333,7 @@ def strip(
     threshold_db: float,
     min_silence: float,
     padding: float,
+    dry_run: bool = False,
 ) -> Outcome:
     before = probe_duration(source)
     samples = decode(source)
@@ -332,10 +350,14 @@ def strip(
     # quiet is too brief to be silence.
     whole = len(samples) / ANALYSIS_RATE
     if found is None or found == (0.0, whole):
-        keep_unchanged(source, destination)
+        if not dry_run:
+            keep_unchanged(source, destination)
         return Outcome.for_source(source, before, before, unchanged=True)
 
     start, end = found
+    if dry_run:
+        return Outcome.for_source(source, before, preview(source, start, end))
+
     place(
         source,
         destination,
@@ -345,6 +367,23 @@ def strip(
     # Measured from the written file rather than from the bounds we asked for,
     # so the report states what is actually on disk after frame rounding.
     return Outcome.for_source(source, before, probe_duration(destination))
+
+
+def settings_error(min_silence: float, padding: float) -> str | None:
+    """Why these settings would break idempotency, or None if they are safe.
+
+    After a strip the quiet left at each end is the padding plus up to a frame
+    of rounding. If that residue is long enough to count as silence next time,
+    every re-run eats another slice of the utterance. See ADR-0001.
+    """
+    floor = padding + FRAME_DURATION
+    if min_silence <= floor:
+        return (
+            f"--min-silence must exceed --padding plus one {FRAME_DURATION * 1000:.1f}ms "
+            f"frame, so more than {floor:.4f}s, or repeated runs would keep "
+            f"stripping; got {min_silence}s"
+        )
+    return None
 
 
 def check_source(source: Path) -> None:
@@ -374,7 +413,14 @@ def destination_for(
 
 
 def strip_all(
-    sources: Sequence[Path], *, inplace: bool, named: Path | None
+    sources: Sequence[Path],
+    *,
+    inplace: bool,
+    named: Path | None,
+    threshold_db: float,
+    min_silence: float,
+    padding: float,
+    dry_run: bool,
 ) -> tuple[list[Outcome], int]:
     """Strip every source, reporting as it goes. Returns outcomes and failures.
 
@@ -389,9 +435,10 @@ def strip_all(
             outcome = strip(
                 source,
                 destination_for(source, inplace=inplace, named=named),
-                threshold_db=DEFAULT_THRESHOLD_DB,
-                min_silence=DEFAULT_MIN_SILENCE,
-                padding=DEFAULT_PADDING,
+                threshold_db=threshold_db,
+                min_silence=min_silence,
+                padding=padding,
+                dry_run=dry_run,
             )
         except Failure as failure:
             print(f"{source}: {failure}", file=sys.stderr)
@@ -421,6 +468,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         help="write the result to this path (one source only)",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would happen without writing anything",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=DEFAULT_THRESHOLD_DB,
+        metavar="DBFS",
+        help=f"below this amplitude counts as quiet (default {DEFAULT_THRESHOLD_DB})",
+    )
+    parser.add_argument(
+        "--min-silence",
+        type=float,
+        default=DEFAULT_MIN_SILENCE,
+        metavar="SECONDS",
+        help=f"how long quiet must last to be silence (default {DEFAULT_MIN_SILENCE})",
+    )
+    parser.add_argument(
+        "--padding",
+        type=float,
+        default=DEFAULT_PADDING,
+        metavar="SECONDS",
+        help=f"silence kept at each end (default {DEFAULT_PADDING})",
+    )
     args = parser.parse_args(argv)
 
     # Checked once, up front: without these nothing can succeed, and repeating
@@ -432,6 +505,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"top-and-tail needs ffmpeg and ffprobe, which ship together",
             file=sys.stderr,
         )
+        return 2
+
+    # Checked before any source is read: a combination that would erode audio
+    # on every run must fail loudly rather than quietly.
+    problem = settings_error(args.min_silence, args.padding)
+    if problem:
+        print(problem, file=sys.stderr)
         return 2
 
     # Sources are explicit file paths. Directories are never walked, so being
@@ -456,7 +536,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     outcomes, failures = strip_all(
-        args.sources, inplace=args.inplace, named=args.output
+        args.sources,
+        inplace=args.inplace,
+        named=args.output,
+        threshold_db=args.threshold,
+        min_silence=args.min_silence,
+        padding=args.padding,
+        dry_run=args.dry_run,
     )
 
     # A summary that merely restates the single line above it is noise — which
@@ -465,6 +551,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(Outcome.total(outcomes))
     if failures and len(args.sources) > 1:
         print(f"{failures} of {len(args.sources)} sources failed", file=sys.stderr)
+    if args.dry_run:
+        print("dry run — nothing was written")
 
     return 1 if failures else 0
 

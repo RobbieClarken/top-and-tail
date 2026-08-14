@@ -6,8 +6,10 @@
 """Strip leading and trailing silence from MP3 files without re-encoding."""
 
 import argparse
+import os
 import subprocess
 import sys
+import tempfile
 from array import array
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -135,6 +137,26 @@ def copy_frames(
     )
 
 
+def write_atomically(
+    source: Path, destination: Path, start: float, end: float
+) -> None:
+    """Write the stripped result through a temporary file, then rename.
+
+    The temporary lives in the destination's own directory so the rename stays
+    on one filesystem and is therefore atomic. An interrupted run leaves the
+    destination as it was rather than truncated, which is what makes it safe
+    to point a destination at its own source.
+    """
+    handle, temporary = tempfile.mkstemp(dir=destination.parent, suffix=".mp3")
+    os.close(handle)
+    scratch = Path(temporary)
+    try:
+        copy_frames(source, scratch, start, end)
+        os.replace(scratch, destination)
+    finally:
+        scratch.unlink(missing_ok=True)
+
+
 @dataclass(frozen=True)
 class Outcome:
     """What stripping did to one source, or to a whole batch."""
@@ -192,7 +214,7 @@ def strip(
     # A source with no utterance is kept whole rather than truncated to
     # nothing. Reporting it as unchanged belongs to a later ticket.
     start, end = found if found else (0.0, len(samples) / ANALYSIS_RATE)
-    copy_frames(source, destination, start, end)
+    write_atomically(source, destination, start, end)
 
     # Measured from the written file rather than from the bounds we asked for,
     # so the report states what is actually on disk after frame rounding.
@@ -203,11 +225,33 @@ def default_destination(source: Path) -> Path:
     return source.with_suffix(".stripped.mp3")
 
 
+def destination_for(source: Path, inplace: bool, output: Path | None) -> Path:
+    if inplace:
+        return source
+    if output is not None:
+        return output
+    return default_destination(source)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Strip leading and trailing silence from MP3 files.",
     )
     parser.add_argument("sources", nargs="+", type=Path, metavar="source")
+    # Deliberately no -i short form: it means *input* in ffmpeg and most audio
+    # tooling, and here it would silently overwrite the source.
+    destinations = parser.add_mutually_exclusive_group()
+    destinations.add_argument(
+        "--inplace",
+        action="store_true",
+        help="replace each source with its stripped result",
+    )
+    destinations.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="write the result to this path (one source only)",
+    )
     args = parser.parse_args(argv)
 
     # Sources are explicit file paths. Directories are never walked, so being
@@ -221,11 +265,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         return 2
 
+    # One named destination cannot hold several results, and silently letting
+    # the last source win would lose the others.
+    if args.output is not None and len(args.sources) > 1:
+        print(
+            f"-o/--output names a single destination, "
+            f"but {len(args.sources)} sources were given",
+            file=sys.stderr,
+        )
+        return 2
+
     outcomes = []
     for source in args.sources:
+        destination = destination_for(source, args.inplace, args.output)
         outcome = strip(
             source,
-            default_destination(source),
+            destination,
             threshold_db=DEFAULT_THRESHOLD_DB,
             min_silence=DEFAULT_MIN_SILENCE,
             padding=DEFAULT_PADDING,

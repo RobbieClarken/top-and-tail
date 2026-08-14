@@ -1,5 +1,6 @@
 """Seam 1: the CLI, invoked as a subprocess against real ffmpeg."""
 
+import os
 import re
 import subprocess
 from array import array
@@ -275,3 +276,102 @@ def test_a_rerun_never_reports_the_file_growing(hablar):
     assert reported, result.stdout
     before, after = float(reported.group(1)), float(reported.group(2))
     assert after <= before
+
+
+def test_inplace_replaces_the_source(hablar):
+    result = run("--inplace", hablar)
+
+    assert result.returncode == 0, result.stderr
+    assert 0.65 < duration(hablar) < 0.72
+    assert not hablar.with_suffix(".stripped.mp3").exists()
+    # No temporary file left behind.
+    assert [p.name for p in hablar.parent.iterdir()] == [hablar.name]
+
+
+def test_there_is_no_short_form_for_inplace(hablar):
+    # -i means *input* in ffmpeg; typed here by muscle memory it must not
+    # silently overwrite the source.
+    original = hablar.read_bytes()
+
+    result = run("-i", hablar)
+
+    assert result.returncode != 0
+    assert hablar.read_bytes() == original
+
+
+def test_output_writes_to_the_named_destination(hablar, tmp_path):
+    named = tmp_path / "chosen.mp3"
+
+    result = run("-o", named, hablar)
+
+    assert result.returncode == 0, result.stderr
+    assert named.exists()
+    assert 0.65 < duration(named) < 0.72
+    assert not hablar.with_suffix(".stripped.mp3").exists()
+    assert duration(hablar) > 1.9
+
+
+def test_output_overwrites_an_existing_destination(hablar, tmp_path):
+    named = tmp_path / "chosen.mp3"
+    named.write_bytes(b"not an mp3 at all")
+
+    result = run("-o", named, hablar)
+
+    assert result.returncode == 0, result.stderr
+    assert 0.65 < duration(named) < 0.72
+
+
+def test_output_with_several_sources_is_rejected(tmp_path):
+    sources = [copy_fixture(name, tmp_path) for name in sorted(UTTERANCE_ENDS)]
+    named = tmp_path / "chosen.mp3"
+
+    result = run("-o", named, *sources)
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert not named.exists()
+    for source in sources:
+        assert not source.with_suffix(".stripped.mp3").exists()
+
+
+def test_output_with_inplace_is_rejected(hablar, tmp_path):
+    original = hablar.read_bytes()
+
+    result = run("-o", tmp_path / "chosen.mp3", "--inplace", hablar)
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert hablar.read_bytes() == original
+    assert not (tmp_path / "chosen.mp3").exists()
+
+
+def test_a_destination_that_is_its_own_source_strips_in_place(hablar):
+    # Must not truncate the file while reading it.
+    result = run("-o", hablar, hablar)
+
+    assert result.returncode == 0, result.stderr
+    assert 0.65 < duration(hablar) < 0.72
+    assert [p.name for p in hablar.parent.iterdir()] == [hablar.name]
+
+
+def test_inplace_writes_via_a_temporary_and_renames(hablar):
+    # A rename swaps in a different file, so the inode changes. Writing over
+    # the source directly would keep it — and would truncate on failure.
+    before = hablar.stat().st_ino
+
+    assert run("--inplace", hablar).returncode == 0
+
+    assert hablar.stat().st_ino != before
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_a_failed_inplace_write_leaves_the_source_intact(hablar):
+    original = hablar.read_bytes()
+    hablar.parent.chmod(0o555)
+    try:
+        result = run("--inplace", hablar)
+    finally:
+        hablar.parent.chmod(0o755)
+
+    assert result.returncode != 0
+    assert hablar.read_bytes() == original

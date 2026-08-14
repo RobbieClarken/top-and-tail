@@ -65,10 +65,10 @@ def find_bounds(
     stripping — quiet anywhere else is internal silence and is left alone.
 
     Sound is judged by the same yardstick as quiet: just as quiet shorter than
-    the minimum silence run is not silence, a burst of sound shorter than it,
-    cut off from the utterance by silence, is an artifact rather than speech.
-    Without that rule a single click at the end of a file — or a decoder
-    ringing on the final frame — hides all the silence in front of it.
+    the minimum silence run is not silence, a stretch of sound shorter than it,
+    cut off from the rest by silence, is an artifact rather than part of the
+    utterance. Without that rule a single click at the end of a file — or a
+    decoder ringing on the final frame — hides all the silence in front of it.
     """
     total = len(samples)
     if not total:
@@ -78,27 +78,29 @@ def find_bounds(
     min_samples = round(min_silence * sample_rate)
     pad_samples = round(padding * sample_rate)
 
-    runs = list(_quiet_runs(samples, limit))
-    if runs == [(0, total)]:
+    silences = [
+        run
+        for run in _quiet_runs(samples, limit)
+        if run[1] - run[0] >= min_samples
+    ]
+
+    # The silences cut the buffer into chunks of material. Chunks long enough
+    # to be part of the utterance anchor it; the short ones are artifacts, and
+    # any number of them can be shed from either end. Judging every chunk at
+    # once — rather than peeling one off each edge — is what keeps a second
+    # run from finding yet another artifact to strip.
+    edges = [0]
+    for silence in silences:
+        edges.extend(silence)
+    edges.append(total)
+    chunks = [(edges[i], edges[i + 1]) for i in range(0, len(edges), 2)]
+
+    utterance = [chunk for chunk in chunks if chunk[1] - chunk[0] >= min_samples]
+    if not utterance:
         return None
 
-    silences = [run for run in runs if run[1] - run[0] >= min_samples]
-
-    # The utterance runs from the end of the leading silence to the start of
-    # the trailing one. A silence only counts as leading or trailing if what
-    # lies outside it is too brief to be speech.
-    utterance_start = 0
-    utterance_end = total
-    if silences:
-        first_start, first_end = silences[0]
-        if first_start < min_samples:
-            utterance_start = first_end
-        last_start, last_end = silences[-1]
-        if total - last_end < min_samples:
-            utterance_end = last_start
-
-    start = max(utterance_start - pad_samples, 0)
-    end = min(utterance_end + pad_samples, total)
+    start = max(utterance[0][0] - pad_samples, 0)
+    end = min(utterance[-1][1] + pad_samples, total)
     return start / sample_rate, end / sample_rate
 
 

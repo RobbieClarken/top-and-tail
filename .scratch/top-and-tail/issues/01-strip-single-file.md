@@ -43,6 +43,14 @@ Covered instead by three tests, which together exceed what the original criterio
 
 `find_bounds` scanned back from the very last sample and stopped at the first thing above the threshold, so trailing silence was only ever found if it reached the end of the buffer. The `él` fixture ends with eleven stray samples in its final 3.1 ms, peaking at −44.7 dBFS — 0.017% of the file — and that was enough to hide 1.15 s of silence and report the whole thing as unchanged. `hablar` only escaped by luck: its final samples measure 1 to 3, far below the limit.
 
-Fixed by judging sound the same way as quiet: a burst shorter than the minimum silence run, cut off from the utterance by silence, is an artifact rather than speech. The rule is symmetric, so a click at the start cannot hide leading silence either. No new setting — the existing minimum silence run is the yardstick.
+Fixed by judging sound the same way as quiet: a stretch shorter than the minimum silence run, cut off from the rest by silence, is an artifact rather than part of the utterance. The rule is symmetric, so a click at the start cannot hide leading silence either. No new setting — the existing minimum silence run is the yardstick.
 
 `find_bounds` now works from the maximal runs of quiet rather than scanning inward from each edge, which made the rule expressible without a second pass. All twelve original unit cases pass unchanged. New terms in `CONTEXT.md`: **Artifact**.
+
+**Review of that fix found two bugs in it.** Both are recorded here because they are properties of `find_bounds`, and both were caught by the two-axis review rather than by the tests written alongside the fix.
+
+*Inverted bounds.* When both ends were artifacts, `utterance_start` moved right past `utterance_end`, producing bounds like `(0.028, 0.008)`. Those went straight to ffmpeg as `-ss 0.95 -to 0.05`, which exits non-zero and surfaced as an uncaught traceback — and, in a batch, killed the remaining sources. A source that is nothing but artifacts has no utterance, so the answer is `None` and the outcome is `unchanged`.
+
+*The rule was applied once per end, not to a fixpoint.* A second artifact behind the first survived, so each run stripped a little further: 1.51s → 0.97s → 0.47s → stable. **That broke idempotency, the guarantee the whole design rests on**, and the fix that introduced it was itself motivated by correctness.
+
+Both fixed by reframing: the silences cut the buffer into chunks of material, the chunks long enough to be part of the utterance anchor it, and every short chunk at either end is shed at once. This also retired the `runs == [(0, total)]` sentinel for "entirely silent" — an all-quiet buffer now simply has no substantial chunk. All fifteen prior unit cases pass unchanged.

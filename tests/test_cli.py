@@ -559,3 +559,62 @@ def test_a_tail_artifact_does_not_defeat_trailing_silence(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "unchanged" not in result.stdout
     assert_stripped(source.with_suffix(".stripped.mp3"), seconds=0.366)
+
+
+def make_artifact_mp3(path, tail_silence=True):
+    """A tone bracketed by clicks and silences — several artifacts per end."""
+    pieces = ["sine=f=800:d=0.02", "anullsrc=r=44100:cl=mono:d=0.5", "sine=f=440:d=0.5"]
+    if tail_silence:
+        pieces += ["anullsrc=r=44100:cl=mono:d=0.5", "sine=f=800:d=0.02"]
+    inputs = []
+    for piece in pieces:
+        inputs += ["-f", "lavfi", "-i", piece]
+    joined = "".join(f"[{n}:a]" for n in range(len(pieces)))
+    subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-y", *inputs,
+            "-filter_complex", f"{joined}concat=n={len(pieces)}:v=0:a=1[out]",
+            "-map", "[out]", "-ac", "1", "-ar", str(RATE),
+            "-c:a", "libmp3lame", "-b:a", "128k", str(path),
+        ],
+        check=True,
+    )
+    return path
+
+
+def test_several_artifacts_are_stripped_in_one_run(tmp_path):
+    # Shedding one artifact per run would make the tool eat further into the
+    # file every time it was run.
+    source = make_artifact_mp3(tmp_path / "clicks.mp3")
+
+    assert run("--inplace", source).returncode == 0
+    once = source.read_bytes()
+    assert run("--inplace", source).returncode == 0
+
+    assert source.read_bytes() == once
+    assert duration(source) < 0.7
+
+
+def test_a_source_of_nothing_but_artifacts_is_unchanged(tmp_path):
+    # Inverted bounds here used to hand ffmpeg a backwards cut and crash.
+    clicks = tmp_path / "clicks-only.mp3"
+    subprocess.run(
+        [
+            "ffmpeg", "-v", "error", "-y",
+            "-f", "lavfi", "-i", "sine=f=800:d=0.02",
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono:d=1.0",
+            "-f", "lavfi", "-i", "sine=f=800:d=0.02",
+            "-filter_complex", "[0:a][1:a][2:a]concat=n=3:v=0:a=1[out]",
+            "-map", "[out]", "-ac", "1", "-ar", str(RATE),
+            "-c:a", "libmp3lame", "-b:a", "128k", str(clicks),
+        ],
+        check=True,
+    )
+    original = clicks.read_bytes()
+
+    result = run("--inplace", clicks)
+
+    assert result.returncode == 0, result.stderr
+    assert "Traceback" not in result.stderr
+    assert "unchanged" in result.stdout
+    assert clicks.read_bytes() == original

@@ -9,7 +9,7 @@ The audible content of a source file — a single spoken vocabulary item. Everyt
 _Avoid_: Speech, clip, sample
 
 **Artifact**:
-A burst of sound too brief to be speech, separated from the utterance by silence — a click, or a decoder ringing on a file's final frame. Judged by the same minimum silence run that decides what counts as silence, and stripped along with the silence around it.
+A stretch of sound too brief to be part of the utterance, cut off from it by silence — a click, or a decoder ringing on a file's final frame. Judged by the same minimum silence run that decides what counts as silence, and stripped along with the silence around it. A source containing nothing but artifacts has no utterance.
 _Avoid_: Noise, glitch, blip
 
 **Silence**:

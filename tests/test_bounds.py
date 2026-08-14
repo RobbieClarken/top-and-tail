@@ -75,19 +75,33 @@ def test_a_buffer_that_is_silent_throughout_has_no_utterance():
     assert bounds(samples((QUIET, 100))) is None
 
 
-def test_a_brief_burst_after_silence_does_not_extend_the_utterance():
-    # A click or a decoder's ringing on the final frame is not speech, and
+def test_an_artifact_after_silence_does_not_extend_the_utterance():
+    # A click, or a decoder's ringing on the final frame, is not part of the
+    # utterance, and
     # must not hide the silence in front of it.
     buffer = samples((LOUD, 20), (QUIET, 30), (LOUD, 3))
     assert bounds(buffer) == approx((0.0, 0.025))
 
 
-def test_a_sustained_burst_after_silence_does_extend_the_utterance():
+def test_sustained_sound_after_silence_does_extend_the_utterance():
     # Long enough to be real content, so the silence before it is internal.
     buffer = samples((LOUD, 20), (QUIET, 30), (LOUD, 15))
     assert bounds(buffer) == approx((0.0, 0.065))
 
 
-def test_a_brief_burst_before_silence_does_not_extend_the_utterance():
+def test_an_artifact_before_silence_does_not_extend_the_utterance():
     buffer = samples((LOUD, 3), (QUIET, 30), (LOUD, 20))
     assert bounds(buffer) == approx((0.028, 0.053))
+
+
+def test_several_artifacts_are_all_stripped_in_one_pass():
+    # Applying the rule once leaves the artifact behind the first silence,
+    # so a second run would strip further and the tool would not be idempotent.
+    buffer = samples((LOUD, 20), (QUIET, 30), (LOUD, 3), (QUIET, 30))
+    assert bounds(buffer) == approx((0.0, 0.025))
+
+
+def test_a_buffer_of_nothing_but_artifacts_has_no_utterance():
+    # Bounds must never come back inverted: there is no utterance here.
+    buffer = samples((LOUD, 3), (QUIET, 30), (LOUD, 3))
+    assert bounds(buffer) is None

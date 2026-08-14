@@ -36,3 +36,15 @@ Ticket 02 also established the shape for a clean rejection: a message on stderr 
 **Also translated `copy_frames` failures**, which the criteria do not mention. It shells out to ffmpeg and could raise `CalledProcessError` from any write problem, which would have been the one remaining path to a traceback.
 
 Every failure test asserts `"Traceback" not in stderr`, following the shape ticket 02 established — without it a test can pass against an unhandled exception whose text happens to contain the right words.
+
+**Follow-up fixes, from checking edge cases by hand.**
+
+The two-axis review could not be run — the sub-agents failed with repeated server-side 529s — so the adversarial pass below was done in one context by the implementer, which is weaker. **Worth re-running `/code-review` over this ticket when the API recovers.**
+
+*A source whose relative name begins with a dash was reported as unreadable.* `ffprobe` takes its input as a positional argument, so `-dash.mp3` was parsed as an option and failed with "Missing argument for option 'dash.mp3'" — a valid MP3 reported as `not a readable MP3`. `Path("./-dash.mp3")` normalises away the `./`, so even writing the prefix did not help. Every subprocess argument is now rendered absolute, which can never begin with a dash. Pinned by a test verified to fail when the fix is reverted.
+
+*The dependency message named the wrong tool.* With only `ffprobe` missing it still read "needs ffmpeg installed". It now names both and says they ship together, and the test is parametrised over ffmpeg-absent and ffprobe-absent-alone.
+
+Checked clean with no stack trace, exit 1: empty `.mp3`, truncated `.mp3`, dangling symlink, symlink loop, unreadable file, FIFO, a directory as `-o`, a missing parent directory for `-o`, the same source twice, a relative path containing `..`, and a leading-dash name.
+
+**Known rough edge, not fixed:** a source with no read permission reports `not a readable MP3` rather than a permissions problem. Accurate in that ffmpeg cannot read it, but it points at the wrong cause. Distinguishing the two means stat-ing before decoding, which would be one more thing to keep in step with reality.

@@ -682,13 +682,19 @@ def test_a_failed_inplace_run_leaves_no_temporary_behind(hablar, tmp_path):
     ]
 
 
-def test_missing_dependencies_are_reported_by_name(hablar, tmp_path):
-    # A PATH holding only uv, so the shebang still resolves but ffmpeg does not.
+@pytest.mark.parametrize("present", [(), ("ffmpeg",)])
+def test_missing_dependencies_are_reported_by_name(present, hablar, tmp_path):
+    """Each required binary is named when absent, including ffprobe alone.
+
+    The PATH holds only uv plus whatever `present` allows, so the shebang still
+    resolves while the tools under test do not.
+    """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    uv = shutil.which("uv")
-    assert uv, "uv is needed to run the tool"
-    (bin_dir / "uv").symlink_to(uv)
+    for name in ("uv", *present):
+        found = shutil.which(name)
+        assert found, f"{name} is needed to run this test"
+        (bin_dir / name).symlink_to(found)
 
     result = subprocess.run(
         [str(TOOL), str(hablar)],
@@ -699,5 +705,23 @@ def test_missing_dependencies_are_reported_by_name(hablar, tmp_path):
 
     assert result.returncode != 0
     assert "Traceback" not in result.stderr
-    assert "ffmpeg" in result.stderr
+    expected = "ffprobe" if present else "ffmpeg"
+    assert expected in result.stderr
     assert not hablar.with_suffix(".stripped.mp3").exists()
+
+
+def test_a_relative_source_name_starting_with_a_dash_is_handled(hablar):
+    # ffprobe takes its input positionally, so "-dash.mp3" was parsed as an
+    # option and a perfectly good file was reported as unreadable.
+    dashed = hablar.parent / "-dash.mp3"
+    dashed.write_bytes(hablar.read_bytes())
+
+    result = subprocess.run(
+        [str(TOOL), "--", "-dash.mp3"],
+        cwd=hablar.parent,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert_stripped(dashed.with_suffix(".stripped.mp3"))

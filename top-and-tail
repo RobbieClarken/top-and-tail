@@ -32,6 +32,16 @@ DEFAULT_PADDING = 0.050
 REQUIRED_TOOLS = ("ffmpeg", "ffprobe")
 
 
+def _as_argument(path: Path) -> str:
+    """Render a path for a command line, always absolute.
+
+    ffprobe takes its input as a positional argument, so a relative name
+    beginning with a dash would be parsed as an option — `-dash.mp3` fails with
+    "Missing argument for option". An absolute path can never start with one.
+    """
+    return str(path.absolute())
+
+
 class Failure(Exception):
     """A problem with one source, reported to the user without a stack trace."""
 
@@ -116,7 +126,7 @@ def decode(source: Path) -> "array[int]":
     try:
         result = subprocess.run(
             [
-                "ffmpeg", "-v", "error", "-i", str(source),
+                "ffmpeg", "-v", "error", "-i", _as_argument(source),
                 "-ac", "1", "-ar", str(ANALYSIS_RATE), "-f", "s16le", "-",
             ],
             capture_output=True,
@@ -144,7 +154,7 @@ def probe_duration(path: Path) -> float:
                 "ffprobe", "-v", "error",
                 "-show_entries", "format=duration",
                 "-of", "default=noprint_wrappers=1:nokey=1",
-                str(path),
+                _as_argument(path),
             ],
             capture_output=True,
             text=True,
@@ -175,9 +185,9 @@ def copy_frames(
             [
                 "ffmpeg", "-v", "error", "-y",
                 "-ss", f"{start:.6f}", "-to", f"{end:.6f}",
-                "-i", str(source),
+                "-i", _as_argument(source),
                 "-c", "copy", "-map_metadata", "0",
-                str(destination),
+                _as_argument(destination),
             ],
             capture_output=True,
             check=True,
@@ -377,7 +387,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if missing:
         print(
             f"{' and '.join(missing)} not found on PATH — "
-            f"top-and-tail needs ffmpeg installed",
+            f"top-and-tail needs ffmpeg and ffprobe, which ship together",
             file=sys.stderr,
         )
         return 2

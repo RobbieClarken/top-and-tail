@@ -23,6 +23,8 @@ Alongside them, the invariant that keeps the tool idempotent: **the minimum sile
 
 **The invariant is a pure predicate**, `settings_error(min_silence, padding) -> str | None`, checked before any source is read so a bad combination cannot half-process a batch. It exits 2, matching the other environment and usage errors. The message states the floor it computed rather than restating the rule abstractly: *"--min-silence must exceed --padding plus one 26.1ms frame, so more than 0.2261s ... got 0.1s"*.
 
-**Tested at the CLI rather than as a unit.** The ticket asks for unit tests of the invariant, but the two agreed seams are the CLI and the boundary arithmetic, and a validation predicate is neither. Four cases straddle the boundary to the tenth of a millisecond — just below, exactly on it, just above, and the default — which is the coverage the ticket wanted. Verified to fail when the check is removed.
+**Tested at both seams.** Initially only at the CLI, on the reasoning that a validation predicate is neither the CLI nor the boundary arithmetic — but review pointed out the parent spec's own Seam 2 list names this invariant explicitly, so that reasoning was contradicted by the document it appealed to. `settings_error` is now unit-tested at Seam 2 as well, and the spec's description of that seam widened to cover the pure functions rather than boundary detection alone.
+
+The boundary cases also used `repr(0.05 + 1152 / 44100)`, recomputing the implementation's own constant — it would have followed a wrong `FRAME_DURATION` rather than caught one. The figures now come from ADR-0001.
 
 **ADR-0001 is now satisfied.** It described this validation as already existing at startup; until this ticket it did not.

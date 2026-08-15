@@ -105,3 +105,24 @@ def test_a_buffer_of_nothing_but_artifacts_has_no_utterance():
     # Bounds must never come back inverted: there is no utterance here.
     buffer = samples((LOUD, 3), (QUIET, 30), (LOUD, 3))
     assert bounds(buffer) is None
+
+
+# The idempotency invariant from ADR-0001, at the pure-function seam. The
+# boundary figures are the ADR's, not recomputed from the implementation.
+def test_settings_are_rejected_when_padding_crowds_the_minimum_silence():
+    assert tool.settings_error(min_silence=0.0761224, padding=0.05) is not None
+
+
+def test_settings_are_accepted_just_above_the_boundary():
+    assert tool.settings_error(min_silence=0.0761225, padding=0.05) is None
+
+
+def test_the_default_settings_are_accepted():
+    assert tool.settings_error(min_silence=0.1, padding=0.050) is None
+
+
+def test_the_rejection_names_both_settings_and_the_floor():
+    problem = tool.settings_error(min_silence=0.1, padding=0.2)
+    assert problem is not None
+    assert "--min-silence" in problem and "--padding" in problem
+    assert "0.2261" in problem

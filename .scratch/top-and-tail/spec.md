@@ -113,7 +113,7 @@ The user points it at one or more source files. By default each result is writte
 
 - One line per source on stdout, giving the source name, the duration before and after, and the percentage saved; `unchanged` sources say so rather than being hidden.
 - A summary line closes a batch.
-- `--dry-run` performs all analysis and reporting but writes nothing.
+- `--dry-run` performs all analysis and reporting, and writes nothing the user can see: no destination, no modified source, and nothing at all in the user's own directories. It measures rather than predicts, performing the cut into the system temporary directory, because the duration a real run reports is only known once the frame-rounded cut exists. It also checks that the destination could be written, so a preview never reports success for a run certain to fail.
 - Failures — an invalid or corrupt MP3, an unwritable destination — are reported per file and do not stop the remaining sources being processed.
 - The process exits non-zero if any source failed, and zero otherwise, including when every source was `unchanged`.
 
@@ -145,7 +145,7 @@ Coverage at this seam:
 
 ### Seam 2: the boundary arithmetic, as a pure function
 
-A function from PCM samples plus the three settings to a pair of boundaries. It earns a seam of its own because the numeric edge cases are combinatorial and reaching them through Seam 1 would require synthesising a bespoke MP3 fixture for each. Tested with synthetic samples and no files:
+The pure functions: boundary detection, from PCM samples plus the three settings to a pair of boundaries, and the settings validation beside it. They earn a seam of their own because the numeric edge cases are combinatorial and reaching them through Seam 1 would require synthesising a bespoke MP3 fixture for each. Tested with synthetic samples and no files:
 
 - Silence shorter than the minimum silence run is not treated as silence.
 - Silence exactly at the minimum silence run boundary.

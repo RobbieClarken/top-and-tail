@@ -312,7 +312,21 @@ def keep_unchanged(source: Path, destination: Path) -> None:
     place(source, destination, lambda scratch: copy_bytes(source, scratch))
 
 
-def preview(source: Path, start: float, end: float) -> float:
+def check_writable(destination: Path) -> None:
+    """Whether a real run could write here, without writing anything.
+
+    A dry run never touches the destination, so it would otherwise report
+    success for a run that is certain to fail — exactly the case the preview
+    exists to catch.
+    """
+    parent = destination.parent
+    if not parent.is_dir():
+        raise Failure(f"cannot write {destination}: No such directory")
+    if not os.access(parent, os.W_OK):
+        raise Failure(f"cannot write {destination}: Permission denied")
+
+
+def duration_if_stripped(source: Path, start: float, end: float) -> float:
     """How long the result would be, without writing anything the user sees.
 
     The cut is performed for real, into the system temporary directory rather
@@ -333,7 +347,7 @@ def strip(
     threshold_db: float,
     min_silence: float,
     padding: float,
-    dry_run: bool = False,
+    dry_run: bool,
 ) -> Outcome:
     before = probe_duration(source)
     samples = decode(source)
@@ -350,13 +364,20 @@ def strip(
     # quiet is too brief to be silence.
     whole = len(samples) / ANALYSIS_RATE
     if found is None or found == (0.0, whole):
-        if not dry_run:
+        if dry_run:
+            # A real run would copy the source across, unless it is already
+            # sitting at the destination.
+            if not is_same_file(source, destination):
+                check_writable(destination)
+        else:
             keep_unchanged(source, destination)
         return Outcome.for_source(source, before, before, unchanged=True)
 
     start, end = found
     if dry_run:
-        return Outcome.for_source(source, before, preview(source, start, end))
+        check_writable(destination)
+        after = duration_if_stripped(source, start, end)
+        return Outcome.for_source(source, before, after)
 
     place(
         source,
@@ -410,6 +431,12 @@ def destination_for(
     if named is not None:
         return named.resolve()
     return source.with_suffix(".stripped.mp3").resolve()
+
+
+def usage_error(message: str) -> int:
+    """Report a problem that stops the run before it starts."""
+    print(message, file=sys.stderr)
+    return 2
 
 
 def strip_all(
@@ -500,40 +527,35 @@ def main(argv: Sequence[str] | None = None) -> int:
     # the same message for every source would be noise.
     missing = [name for name in REQUIRED_TOOLS if shutil.which(name) is None]
     if missing:
-        print(
+        return usage_error(
             f"{' and '.join(missing)} not found on PATH — "
-            f"top-and-tail needs ffmpeg and ffprobe, which ship together",
-            file=sys.stderr,
+            f"top-and-tail needs ffmpeg and ffprobe, which ship together"
         )
-        return 2
 
     # Checked before any source is read: a combination that would erode audio
     # on every run must fail loudly rather than quietly.
     problem = settings_error(args.min_silence, args.padding)
     if problem:
-        print(problem, file=sys.stderr)
-        return 2
+        return usage_error(problem)
 
     # Sources are explicit file paths. Directories are never walked, so being
     # handed one is a usage error rather than something to recurse into.
     directories = [source for source in args.sources if source.is_dir()]
     if directories:
-        for directory in directories:
-            print(
-                f"{directory}: is a directory — pass explicit file paths",
-                file=sys.stderr,
+        return usage_error(
+            "\n".join(
+                f"{directory}: is a directory — pass explicit file paths"
+                for directory in directories
             )
-        return 2
+        )
 
     # One named destination cannot hold several results, and silently letting
     # the last source win would lose the others.
     if args.output is not None and len(args.sources) > 1:
-        print(
+        return usage_error(
             f"-o/--output names a single destination, "
-            f"but {len(args.sources)} sources were given",
-            file=sys.stderr,
+            f"but {len(args.sources)} sources were given"
         )
-        return 2
 
     outcomes, failures = strip_all(
         args.sources,

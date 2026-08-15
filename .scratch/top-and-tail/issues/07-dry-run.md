@@ -25,3 +25,5 @@ So a dry run performs the cut for real, into the **system temporary directory** 
 **The per-source lines are byte-identical to a real run's**, asserted by running both and comparing. The mode is declared by one trailing line, `dry run — nothing was written`, rather than by decorating each line, so nothing about the report changes shape between preview and reality.
 
 **Nothing is written in any destination mode** — default, `--inplace` and `-o` are each covered, asserting both the directory listing and the source's mtime are untouched. Verified to fail if the preview path is removed.
+
+**Review fix: a dry run reported success for runs certain to fail.** Because the cut goes to the system temporary directory, no destination write was ever attempted, so an unwritable destination — the exact thing a preview is for, before a destructive `--inplace` pass — came back clean at exit 0 while the real run exited 1. `check_writable` now confirms the destination's directory exists and is writable, without creating anything. The only exit-code test covered a corrupt *source*, which agreed by luck.

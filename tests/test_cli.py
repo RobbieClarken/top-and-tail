@@ -797,23 +797,26 @@ def test_a_lower_threshold_strips_more(hablar, tmp_path):
 
 
 def test_more_padding_keeps_more(hablar, tmp_path):
-    default = tmp_path / "default.mp3"
+    # Minimum silence held constant across both runs, so only padding varies —
+    # a larger minimum silence run would leave more audio on its own.
+    tight = tmp_path / "tight.mp3"
     padded = tmp_path / "padded.mp3"
+    fixed = ["--min-silence", "0.4"]
 
-    assert run("-o", default, hablar).returncode == 0
-    assert run("--padding", "0.3", "--min-silence", "0.4", "-o", padded, hablar).returncode == 0
+    assert run(*fixed, "--padding", "0.05", "-o", tight, hablar).returncode == 0
+    assert run(*fixed, "--padding", "0.3", "-o", padded, hablar).returncode == 0
 
-    assert duration(padded) > duration(default)
+    assert duration(padded) > duration(tight)
 
 
-# With 50ms of padding the invariant demands a minimum silence run above
-# 0.05 + 0.0261224 = 0.0761224s. Straddle that to the tenth of a millisecond.
+# ADR-0001 fixes the frame at ~26.1ms, so with 50ms of padding the invariant
+# demands a minimum silence run above 0.0761224s. These literals come from the
+# ADR, not from the implementation's own arithmetic.
 @pytest.mark.parametrize(
     ("min_silence", "accepted"),
     [
-        ("0.0761", False),
-        (repr(0.05 + 1152 / 44100), False),  # exactly on the boundary
-        ("0.0762", True),
+        ("0.0761224", False),
+        ("0.0761225", True),
         ("0.10", True),
     ],
 )
@@ -875,3 +878,21 @@ def test_dry_run_exit_code_matches_a_real_run(tmp_path):
     broken.write_bytes(b"not an mp3" * 64)
 
     assert run("--dry-run", broken).returncode == run(broken).returncode == 1
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_dry_run_reports_an_unwritable_destination(hablar, tmp_path):
+    # A preview that reports success for a run certain to fail is worse than
+    # no preview at all.
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o555)
+    try:
+        dry = run("--dry-run", "-o", locked / "out.mp3", hablar)
+        real = run("-o", locked / "out.mp3", hablar)
+    finally:
+        locked.chmod(0o755)
+
+    assert dry.returncode == real.returncode == 1
+    assert "cannot write" in dry.stderr
+    assert "Traceback" not in dry.stderr

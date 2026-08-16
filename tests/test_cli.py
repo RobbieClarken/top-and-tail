@@ -301,14 +301,14 @@ def test_a_rerun_reports_unchanged_rather_than_growth(hablar):
     """
     run(hablar)
 
-    result = run("--inplace", hablar.with_suffix(".stripped.mp3"))
+    result = run("--in-place", hablar.with_suffix(".stripped.mp3"))
 
     assert "unchanged" in result.stdout
     assert "→" not in result.stdout
 
 
-def test_inplace_replaces_the_source(hablar):
-    result = run("--inplace", hablar)
+def test_in_place_replaces_the_source(hablar):
+    result = run("--in-place", hablar)
 
     assert result.returncode == 0, result.stderr
     assert 0.65 < duration(hablar) < 0.72
@@ -317,7 +317,7 @@ def test_inplace_replaces_the_source(hablar):
     assert [p.name for p in hablar.parent.iterdir()] == [hablar.name]
 
 
-def test_there_is_no_short_form_for_inplace(hablar):
+def test_there_is_no_short_form_for_in_place(hablar):
     # -i means *input* in ffmpeg; typed here by muscle memory it must not
     # silently overwrite the source.
     original = hablar.read_bytes()
@@ -363,10 +363,10 @@ def test_output_with_several_sources_is_rejected(tmp_path):
         assert not source.with_suffix(".stripped.mp3").exists()
 
 
-def test_output_with_inplace_is_rejected(hablar, tmp_path):
+def test_output_with_in_place_is_rejected(hablar, tmp_path):
     original = hablar.read_bytes()
 
-    result = run("-o", tmp_path / "chosen.mp3", "--inplace", hablar)
+    result = run("-o", tmp_path / "chosen.mp3", "--in-place", hablar)
 
     assert result.returncode != 0
     assert "Traceback" not in result.stderr
@@ -384,11 +384,11 @@ def test_a_destination_that_is_its_own_source_strips_in_place(hablar):
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
-def test_a_failed_inplace_write_leaves_the_source_intact(hablar):
+def test_a_failed_in_place_write_leaves_the_source_intact(hablar):
     original = hablar.read_bytes()
     hablar.parent.chmod(0o555)
     try:
-        result = run("--inplace", hablar)
+        result = run("--in-place", hablar)
     finally:
         hablar.parent.chmod(0o755)
 
@@ -409,22 +409,22 @@ def test_output_through_a_symlink_to_the_source_strips_the_target(hablar):
     assert_stripped(hablar)
 
 
-def test_inplace_through_a_symlink_strips_the_target(hablar):
+def test_in_place_through_a_symlink_strips_the_target(hablar):
     link = hablar.parent / "link.mp3"
     link.symlink_to(hablar.name)
 
-    assert run("--inplace", link).returncode == 0
+    assert run("--in-place", link).returncode == 0
 
     assert link.is_symlink()
     assert_stripped(hablar)
 
 
-def test_inplace_keeps_the_source_file_mode(hablar):
+def test_in_place_keeps_the_source_file_mode(hablar):
     # mkstemp creates at 0600; a careless rename would make the file
     # owner-only.
     hablar.chmod(0o644)
 
-    assert run("--inplace", hablar).returncode == 0
+    assert run("--in-place", hablar).returncode == 0
 
     assert stat.S_IMODE(hablar.stat().st_mode) == 0o644
 
@@ -448,11 +448,11 @@ def test_an_overwritten_destination_keeps_its_own_mode(hablar, tmp_path):
     assert stat.S_IMODE(named.stat().st_mode) == 0o600
 
 
-def test_inplace_handles_several_sources(tmp_path):
+def test_in_place_handles_several_sources(tmp_path):
     sources = [copy_fixture(name, tmp_path) for name in sorted(UTTERANCE_ENDS)]
     originals = {source: duration(source) for source in sources}
 
-    assert run("--inplace", *sources).returncode == 0
+    assert run("--in-place", *sources).returncode == 0
 
     for source in sources:
         assert duration(source) < originals[source]
@@ -483,11 +483,11 @@ def test_an_unchanged_outcome_still_writes_the_destination(tmp_path):
     assert named.read_bytes() == silent.read_bytes()
 
 
-def test_inplace_leaves_an_unchanged_source_untouched(hablar):
-    run("--inplace", hablar)
+def test_in_place_leaves_an_unchanged_source_untouched(hablar):
+    run("--in-place", hablar)
     settled = hablar.stat()
 
-    result = run("--inplace", hablar)
+    result = run("--in-place", hablar)
 
     assert "unchanged" in result.stdout
     assert hablar.stat().st_mtime_ns == settled.st_mtime_ns
@@ -508,7 +508,7 @@ def test_a_second_run_is_byte_identical_to_the_first(hablar):
     stripped = hablar.with_suffix(".stripped.mp3")
     first = stripped.read_bytes()
 
-    assert run("--inplace", stripped).returncode == 0
+    assert run("--in-place", stripped).returncode == 0
 
     assert stripped.read_bytes() == first
 
@@ -588,9 +588,9 @@ def test_several_artifacts_are_stripped_in_one_run(tmp_path):
     # file every time it was run.
     source = make_artifact_mp3(tmp_path / "clicks.mp3")
 
-    assert run("--inplace", source).returncode == 0
+    assert run("--in-place", source).returncode == 0
     once = source.read_bytes()
-    assert run("--inplace", source).returncode == 0
+    assert run("--in-place", source).returncode == 0
 
     assert source.read_bytes() == once
     assert duration(source) < 0.7
@@ -613,7 +613,7 @@ def test_a_source_of_nothing_but_artifacts_is_unchanged(tmp_path):
     )
     original = clicks.read_bytes()
 
-    result = run("--inplace", clicks)
+    result = run("--in-place", clicks)
 
     assert result.returncode == 0, result.stderr
     assert "Traceback" not in result.stderr
@@ -844,13 +844,22 @@ def test_dry_run_reports_what_a_real_run_would(hablar, tmp_path):
     assert reported == real.stdout.splitlines()
 
 
+def test_n_is_short_for_dry_run(hablar):
+    short = run("-n", hablar)
+    long = run("--dry-run", hablar)
+
+    assert short.returncode == 0, short.stderr
+    assert short.stdout == long.stdout
+    assert not hablar.with_suffix(".stripped.mp3").exists()
+
+
 def test_dry_run_says_nothing_was_written(hablar):
     result = run("--dry-run", hablar)
 
     assert "nothing was written" in result.stdout
 
 
-@pytest.mark.parametrize("mode", [[], ["--inplace"], ["-o", "chosen.mp3"]])
+@pytest.mark.parametrize("mode", [[], ["--in-place"], ["-o", "chosen.mp3"]])
 def test_dry_run_writes_nothing(mode, hablar):
     mode = [str(hablar.parent / m) if m.endswith(".mp3") else m for m in mode]
     listing = sorted(p.name for p in hablar.parent.iterdir())

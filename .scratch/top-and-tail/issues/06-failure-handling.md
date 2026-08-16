@@ -14,7 +14,7 @@ One bad source does not stop the rest of the batch: the remaining sources are st
 - [x] A source path that does not exist is reported as a named error
 - [x] A failing source does not prevent the remaining sources in the batch being processed
 - [x] The process exits non-zero if any source failed, and zero when all succeeded — including when all were `unchanged`
-- [x] A failure under `--inplace` leaves the source intact, with no temporary file left behind
+- [x] A failure under `--in-place` leaves the source intact, with no temporary file left behind
 - [x] End-to-end tests cover each failure mode and the mixed batch of good and bad sources
 
 ## Comments

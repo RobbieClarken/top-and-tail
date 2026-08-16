@@ -418,7 +418,7 @@ def check_source(source: Path) -> None:
 
 
 def destination_for(
-    source: Path, *, inplace: bool, named: Path | None
+    source: Path, *, in_place: bool, named: Path | None
 ) -> Path:
     """Where one source's result should be written.
 
@@ -426,7 +426,7 @@ def destination_for(
     as the file it points at. Without that, writing to a link that points at
     the source would replace the link and leave the source untouched.
     """
-    if inplace:
+    if in_place:
         return source.resolve()
     if named is not None:
         return named.resolve()
@@ -442,7 +442,7 @@ def usage_error(message: str) -> int:
 def strip_all(
     sources: Sequence[Path],
     *,
-    inplace: bool,
+    in_place: bool,
     named: Path | None,
     threshold_db: float,
     min_silence: float,
@@ -461,7 +461,7 @@ def strip_all(
             check_source(source)
             outcome = strip(
                 source,
-                destination_for(source, inplace=inplace, named=named),
+                destination_for(source, in_place=in_place, named=named),
                 threshold_db=threshold_db,
                 min_silence=min_silence,
                 padding=padding,
@@ -485,7 +485,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # tooling, and here it would silently overwrite the source.
     destinations = parser.add_mutually_exclusive_group()
     destinations.add_argument(
-        "--inplace",
+        "--in-place",
         action="store_true",
         help="replace each source with its stripped result",
     )
@@ -496,6 +496,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="write the result to this path (one source only)",
     )
     parser.add_argument(
+        "-n",
         "--dry-run",
         action="store_true",
         help="report what would happen without writing anything",
@@ -559,7 +560,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     outcomes, failures = strip_all(
         args.sources,
-        inplace=args.inplace,
+        in_place=args.in_place,
         named=args.output,
         threshold_db=args.threshold,
         min_silence=args.min_silence,

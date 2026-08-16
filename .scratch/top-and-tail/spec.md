@@ -23,7 +23,7 @@ The naive fix — a general-purpose "remove silence" filter — is actively wron
 
 A command line tool, `top-and-tail`, that strips leading and trailing silence from MP3 sources while leaving internal silence untouched, and does so without re-encoding, so repeatedly processing a library costs nothing in audio quality.
 
-The user points it at one or more source files. By default each result is written beside its source as `<name>.stripped.mp3`; `--inplace` overwrites the source atomically instead, and `-o` names a single destination. Every run reports what it did per file and is safe to repeat: running the tool twice produces the same result as running it once.
+The user points it at one or more source files. By default each result is written beside its source as `<name>.stripped.mp3`; `--in-place` overwrites the source atomically instead, and `-o` names a single destination. Every run reports what it did per file and is safe to repeat: running the tool twice produces the same result as running it once.
 
 ## User Stories
 
@@ -35,23 +35,23 @@ The user points it at one or more source files. By default each result is writte
 6. As a vocabulary deck maintainer, I want to strip several files in one invocation, so that I can process a batch of newly generated audio at once.
 7. As a vocabulary deck maintainer, I want the destination written beside the source as `<name>.stripped.mp3` by default, so that I can compare against the original before committing to the change.
 8. As a vocabulary deck maintainer, I want an existing `<name>.stripped.mp3` overwritten without prompting, so that re-running after regenerating audio does not require manual cleanup.
-9. As a pipeline author, I want an `--inplace` option, so that downstream references to my media filenames keep working after stripping.
+9. As a pipeline author, I want an `--in-place` option, so that downstream references to my media filenames keep working after stripping.
 10. As a pipeline author, I want in-place writes performed atomically, so that an interrupted run never leaves a truncated file where a good one was.
-11. As a pipeline author, I want the in-place flag spelled only as `--inplace` with no short form, so that muscle memory for `-i` meaning "input" cannot silently destroy my sources.
+11. As a pipeline author, I want the in-place flag spelled only as `--in-place` with no short form, so that muscle memory for `-i` meaning "input" cannot silently destroy my sources.
 12. As a vocabulary deck maintainer, I want an `-o`/`--output` option naming a single destination, so that I can strip one file to a name of my choosing.
 13. As a vocabulary deck maintainer, I want `-o` combined with more than one source to be rejected, so that I am never left guessing which source produced the single destination.
-14. As a vocabulary deck maintainer, I want `-o` combined with `--inplace` to be rejected, so that two contradictory destinations cannot be requested at once.
+14. As a vocabulary deck maintainer, I want `-o` combined with `--in-place` to be rejected, so that two contradictory destinations cannot be requested at once.
 15. As a vocabulary deck maintainer, I want a destination that resolves to its own source to be handled as an in-place strip, so that the file is never truncated while it is being read.
 16. As a pipeline author, I want the tool to be idempotent, so that re-running it over a library that is partly stripped already is safe and leaves finished files alone.
 17. As a pipeline author, I want a startup error if the configured padding and minimum silence run would break idempotency, so that a bad flag combination fails loudly instead of quietly eroding my audio on every run.
 18. As a vocabulary deck maintainer, I want a per-file report of the durations before and after with the percentage saved, so that I can see at a glance that the tool did what I expected.
 19. As a vocabulary deck maintainer, I want files that needed no change reported as `unchanged` rather than omitted, so that a second run visibly confirms idempotency instead of looking like it did nothing.
 20. As a vocabulary deck maintainer, I want a summary line at the end of a batch, so that I do not have to add up per-file results myself.
-21. As a cautious user, I want a `--dry-run` option that reports what would happen and writes nothing, so that I can preview a destructive in-place run before committing to it.
+21. As a cautious user, I want a `-n`/`--dry-run` option that reports what would happen and writes nothing, so that I can preview a destructive in-place run before committing to it.
 22. As a vocabulary deck maintainer, I want a source with no leading or trailing silence reported as `unchanged` with a successful exit, so that already-clean files are not treated as errors.
 23. As a vocabulary deck maintainer, I want a source that is silent throughout reported as `unchanged` rather than truncated to nothing, so that a failed generation is preserved for me to inspect.
 24. As a vocabulary deck maintainer, I want an `unchanged` outcome to still produce the destination as an exact copy of the source, so that my output set is complete regardless of which sources needed work.
-25. As a pipeline author, I want an `unchanged` source under `--inplace` to be left completely untouched with no rewrite, so that file watchers and sync clients are not triggered by a no-op.
+25. As a pipeline author, I want an `unchanged` source under `--in-place` to be left completely untouched with no rewrite, so that file watchers and sync clients are not triggered by a no-op.
 26. As a vocabulary deck maintainer, I want ID3 tags carried across to the destination, so that metadata my importer keys on is not silently lost.
 27. As a pipeline author, I want an invalid or corrupt MP3 reported as an error, so that a failed download does not pass through the pipeline unnoticed.
 28. As a pipeline author, I want one bad source in a batch not to prevent the remaining sources being stripped, so that a single corrupt file does not block the whole run.
@@ -103,17 +103,17 @@ The user points it at one or more source files. By default each result is writte
 ### Destinations and outcomes
 
 - Default destination: the source's name with its extension replaced by `.stripped.mp3`, written beside the source, overwriting any existing file at that path without prompting.
-- `--inplace`: the result is written to a temporary file in the same directory and atomically renamed over the source.
-- `-o`/`--output`: names a single destination file. An error if given alongside more than one source, and an error if given alongside `--inplace`.
+- `--in-place`: the result is written to a temporary file in the same directory and atomically renamed over the source.
+- `-o`/`--output`: names a single destination file. An error if given alongside more than one source, and an error if given alongside `--in-place`.
 - If a destination resolves to the same file as its source, it is treated as an in-place strip and takes the atomic path.
-- An `unchanged` outcome still writes the destination as an exact copy of the source — except under `--inplace`, where the source is left completely untouched with no rewrite and no mtime change.
+- An `unchanged` outcome still writes the destination as an exact copy of the source — except under `--in-place`, where the source is left completely untouched with no rewrite and no mtime change.
 - Sources are supplied as explicit file paths only. Directories are not accepted and no recursion is performed; shell globbing covers the batch case.
 
 ### Reporting and exit codes
 
 - One line per source on stdout, giving the source name, the duration before and after, and the percentage saved; `unchanged` sources say so rather than being hidden.
 - A summary line closes a batch.
-- `--dry-run` performs all analysis and reporting, and writes nothing the user can see: no destination, no modified source, and nothing at all in the user's own directories. It measures rather than predicts, performing the cut into the system temporary directory, because the duration a real run reports is only known once the frame-rounded cut exists. It also checks that the destination could be written, so a preview never reports success for a run certain to fail.
+- `-n`/`--dry-run` performs all analysis and reporting, and writes nothing the user can see: no destination, no modified source, and nothing at all in the user's own directories. It measures rather than predicts, performing the cut into the system temporary directory, because the duration a real run reports is only known once the frame-rounded cut exists. It also checks that the destination could be written, so a preview never reports success for a run certain to fail.
 - Failures — an invalid or corrupt MP3, an unwritable destination — are reported per file and do not stop the remaining sources being processed.
 - The process exits non-zero if any source failed, and zero otherwise, including when every source was `unchanged`.
 
@@ -135,9 +135,9 @@ Coverage at this seam:
 - Leading silence is stripped, also verified against `pretérito`.
 - Running the tool a second time over its own output reports `unchanged` and alters nothing.
 - ID3 tags survive; `mutagen` is permitted inside tests as an independent oracle, but never in the tool itself.
-- Default destination naming, `--inplace` (including that the source is untouched when the outcome is `unchanged`), and `-o`.
+- Default destination naming, `--in-place` (including that the source is untouched when the outcome is `unchanged`), and `-o`.
 - A destination that resolves to its own source is handled without truncation.
-- Every error path: `-o` with multiple sources, `-o` with `--inplace`, a padding and minimum-silence-run combination that violates the invariant, an invalid MP3, and an unwritable destination.
+- Every error path: `-o` with multiple sources, `-o` with `--in-place`, a padding and minimum-silence-run combination that violates the invariant, an invalid MP3, and an unwritable destination.
 - A batch containing one bad source still processes the good ones and exits non-zero.
 - `--dry-run` writes nothing while still reporting.
 - Exit codes for the all-succeeded, all-unchanged, and any-failed cases.
@@ -172,7 +172,7 @@ Four examples are committed to the repository as fixtures, and none is incidenta
 - Packaging, publishing, and any distribution mechanism beyond symlinking the single file onto `PATH`.
 - Generating the audio. The tool consumes what the TTS provider produced and knows nothing about it.
 - Any graphical or interactive interface.
-- Backups of sources under `--inplace`. Atomicity protects against interruption, not against the user changing their mind; `--dry-run` and the default non-destructive naming cover that.
+- Backups of sources under `--in-place`. Atomicity protects against interruption, not against the user changing their mind; `--dry-run` and the default non-destructive naming cover that.
 
 ## Further Notes
 
